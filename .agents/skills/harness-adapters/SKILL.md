@@ -236,7 +236,7 @@ Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
 So `fm_tmux_composer_state` resolves the target's recorded harness from `state/<id>.meta` for `fm-<id>` windows and, for cursor panes only, scans a bounded plain pane tail for the last stripped line beginning with the literal `→ ` prompt.
-It returns `empty` when that row is blank after the prompt or exactly `Add a follow-up`, `pending` when any other text remains there, and `unknown` if no cursor composer row is visible.
+It returns `empty` when that row is blank after the prompt, exactly `Add a follow-up`, or the Cursor busy footer `Add a follow-up ... ctrl+c to stop`; it returns `pending` when any other text remains there, and `unknown` if no cursor composer row is visible.
 That restores Enter retry for slash autocomplete while avoiding false positives from non-cursor arrow-prefixed output and avoiding the off-row `#{cursor_y}` footer.
 There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
 

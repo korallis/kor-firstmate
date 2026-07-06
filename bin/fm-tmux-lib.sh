@@ -155,8 +155,11 @@ EOF
   content="${content%"${content##*[![:space:]]}"}"
   case "$content" in
     ''|'Add a follow-up') printf 'empty'; return 0 ;;
-    *) printf 'pending'; return 0 ;;
   esac
+  if printf '%s' "$content" | grep -qiE '^Add a follow-up[[:space:]]+ctrl\+c to stop$'; then
+    printf 'empty'; return 0
+  fi
+  printf 'pending'; return 0
 }
 
 # fm_tmux_composer_state: classify the cursor/composer line of <target> as

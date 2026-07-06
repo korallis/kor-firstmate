@@ -391,6 +391,12 @@ test_cursor_meta_target_composer_state_reads_arrow_row() {
     fm_tmux_composer_state "fakepane")
   [ "$state" = empty ] || fail "cursor placeholder row read as $state, expected empty"
 
+  printf 'output\n→ Add a follow-up                    ctrl+c to stop\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = empty ] || fail "cursor busy footer row read as $state, expected empty"
+
   printf 'output\n/Users/example/project\n' > "$tail"
   state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
     FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
