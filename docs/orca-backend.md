@@ -1,7 +1,7 @@
 # Orca Backend
 
 Orca is an experimental runtime backend for firstmate.
-It is distinct from the crewmate harness: the harness is the agent process firstmate launches (`claude`, `codex`, `opencode`, `pi`, `grok`, or `cursor`), while Orca owns the task worktree and terminal endpoint underneath that process.
+It is distinct from the crewmate harness: the harness is the agent process firstmate launches (`claude`, `codex`, `opencode`, `pi`, or `grok` on Orca; `cursor` is tmux-only until verified elsewhere), while Orca owns the task worktree and terminal endpoint underneath that process.
 
 ## Setup
 

@@ -191,6 +191,52 @@ test_cursor_no_model_omits_flag() {
   pass "cursor omits --model when no model is requested (uses cursor's own default)"
 }
 
+test_cursor_refuses_non_tmux_backends() {
+  local rec out status launch
+  rec=$(make_spawn_case backend-herdr)
+  read_case_record "$rec"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --backend herdr)
+  status=$?
+  expect_code 1 "$status" "cursor spawn on herdr should be refused"
+  assert_contains "$out" "error: cursor harness is only verified on the tmux backend" \
+    "cursor herdr refusal did not explain the tmux-only gate"
+  assert_absent "$HOME_DIR/state/$ID.meta" "cursor herdr refusal wrote meta"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] || fail "cursor herdr refusal sent a launch command"
+
+  rec=$(make_spawn_case backend-zellij)
+  read_case_record "$rec"
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --backend zellij)
+  status=$?
+  expect_code 1 "$status" "cursor spawn on zellij should be refused"
+  assert_contains "$out" "herdr/zellij/orca/cmux support is not yet verified" \
+    "cursor zellij refusal did not name unverified non-tmux backends"
+  assert_absent "$HOME_DIR/state/$ID.meta" "cursor zellij refusal wrote meta"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] || fail "cursor zellij refusal sent a launch command"
+  pass "cursor refuses non-tmux backend spawns before side effects"
+}
+
+test_cursor_explicit_tmux_backend_still_spawns() {
+  local rec out status launch
+  rec=$(make_spawn_case backend-tmux)
+  read_case_record "$rec"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --backend tmux)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with explicit tmux backend should succeed"
+  assert_contains "$out" "spawned $ID harness=cursor" "explicit tmux cursor spawn did not report success"
+  assert_grep "harness=cursor" "$HOME_DIR/state/$ID.meta" "explicit tmux cursor spawn did not write meta"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force \"\$(cat " \
+    "explicit tmux cursor spawn did not send the cursor launch command"
+  pass "cursor still spawns on the explicit tmux backend"
+}
+
 test_cursor_installs_project_stop_hook() {
   local rec out status hooks
   rec=$(make_spawn_case hook-install)
@@ -477,6 +523,8 @@ test_cursor_launch_template_folds_model_and_effort
 test_cursor_base_slug_without_effort
 test_cursor_non_claude_model_omits_effort_suffix
 test_cursor_no_model_omits_flag
+test_cursor_refuses_non_tmux_backends
+test_cursor_explicit_tmux_backend_still_spawns
 test_cursor_installs_project_stop_hook
 test_cursor_merges_existing_project_hooks
 test_cursor_replaces_prior_firstmate_stop_hook

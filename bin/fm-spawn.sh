@@ -23,6 +23,8 @@
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected
 #   (always explicit). Default tmux spawns do not write backend= to meta;
 #   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   The cursor harness is currently verified only on tmux and is refused on
+#   non-tmux backends until their cursor submit verification is implemented.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -379,6 +381,11 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+if [ "$HARNESS" = cursor ] && [ "$BACKEND" != tmux ]; then
+  echo "error: cursor harness is only verified on the tmux backend; herdr/zellij/orca/cmux support is not yet verified. Re-run on tmux or pick a verified harness." >&2
+  exit 1
+fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a

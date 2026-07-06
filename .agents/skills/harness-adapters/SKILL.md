@@ -241,5 +241,5 @@ That restores Enter retry for slash autocomplete while avoiding false positives 
 There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
 
 **Backend note.** Verified on the tmux reference backend.
-Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook.
-cursor's composer is borderless, so tmux uses the harness-scoped `→ ` row detector while herdr and Orca composer detectors return `unknown` (handled leniently by `fm-send`).
+`fm-spawn` refuses cursor on non-tmux backends because cursor submit verification is only implemented for tmux's harness-scoped `→ ` row detector.
+herdr, zellij, Orca, and cmux cursor support are unverified follow-ups.
