@@ -36,8 +36,19 @@
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
+# cursor: "ctrl+c to stop" (Cursor CLI's mid-turn interrupt hint, shown iff a turn
+# is running - verified cursor-agent 2026.07.01).
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'
+
+# Known empty-composer placeholder text, matched after dim-ghost and border
+# stripping so it never reads as pending input. cursor: "Add a follow-up" (the
+# Cursor CLI's idle-composer placeholder). cursor also parks the terminal cursor
+# OFF the composer row when idle, so this row is usually classified empty before
+# reaching here; this default is the defensive backstop for the terminals/versions
+# where the cursor DOES rest on the placeholder row. cursor-specific text, so it is
+# inert for every other harness's composer (verified cursor-agent 2026.07.01).
+FM_TMUX_COMPOSER_IDLE_RE_DEFAULT='Add a follow-up'
 
 # fm_tmux_strip_ghost: remove dim/faint (ANSI SGR 2) styled runs from one captured
 # composer line, then drop any remaining escape sequences, leaving only the plain,
@@ -133,8 +144,7 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   stripped="${stripped%"${stripped##*[![:space:]]}"}"
   # Nothing left inside the box = empty composer.
   [ -n "$stripped" ] || { printf 'empty'; return 0; }
-  if [ -n "${FM_COMPOSER_IDLE_RE:-}" ] \
-     && printf '%s' "$stripped" | grep -qiE "$FM_COMPOSER_IDLE_RE"; then
+  if printf '%s' "$stripped" | grep -qiE "${FM_COMPOSER_IDLE_RE:-$FM_TMUX_COMPOSER_IDLE_RE_DEFAULT}"; then
     printf 'empty'; return 0
   fi
   # Just a bare prompt glyph = empty composer (idle).

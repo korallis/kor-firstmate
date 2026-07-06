@@ -32,7 +32,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -73,6 +73,8 @@
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
+# cursor uses a per-worktree .cursor/hooks.json "stop" hook (gitignored via
+# info/exclude), which cursor layers on top of the user-level ~/.cursor/hooks.json.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -267,7 +269,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok)
+    ''|claude|codex|opencode|pi|grok|cursor)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -328,6 +330,16 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    # cursor (Cursor CLI, cursor-agent): a positional prompt starts the supervised
+    # interactive TUI. --force (alias --yolo, "Run Everything") auto-approves every
+    # tool execution (verified: the crewmate edits files and runs shell fully
+    # autonomously, no permission gate), the targeted equivalent of claude's
+    # --dangerously-skip-permissions. Auth is the stored ~/.cursor session (Ultra),
+    # so no key is passed. cursor's turn-end signal does NOT ride the launch command
+    # - it is a per-worktree .cursor/hooks.json "stop" hook installed below - so the
+    # template is identical for ship/scout/secondmate. Effort is folded into the
+    # --model slug (model_flag_for_harness), so __EFFORTFLAG__ is always empty here.
+    cursor) printf '%s' 'cursor-agent --force __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -412,11 +424,29 @@ shell_quote() {
 }
 
 model_flag_for_harness() {
-  local harness=$1 model=$2
+  local harness=$1 model=$2 effort=${3:-}
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
     claude|codex|opencode|pi|grok)
       printf -- '--model %s ' "$(shell_quote "$model")"
+      ;;
+    cursor)
+      # cursor-agent has ONE --model flag and expresses reasoning effort as a
+      # model-slug SUFFIX (--model 'claude-opus-4-8-high'), NOT a separate flag.
+      # The bracket form 'slug[effort=high]' is rejected by cursor's model
+      # validator - verified only exact slugs from `cursor-agent models` are
+      # accepted, in both -p and interactive modes - so effort is folded into the
+      # slug here and effort_flag_for_harness emits nothing for cursor. firstmate's
+      # effort vocab (low|medium|high|xhigh|max) maps 1:1 onto the Claude 1M
+      # families (claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-opus-4-7),
+      # whose exact slugs use those five tokens. For gpt-5.5 (none/extra-high, no
+      # xhigh/max), gemini, grok, and composer, bake the desired variant into
+      # --model and leave effort default (see the harness-adapters skill).
+      local slug=$model
+      case "$effort" in
+        low|medium|high|xhigh|max) slug="${model}-${effort}" ;;
+      esac
+      printf -- '--model %s ' "$(shell_quote "$slug")"
       ;;
   esac
 }
@@ -456,6 +486,11 @@ effort_flag_for_harness() {
     # opencode's interactive `opencode --prompt` launch has a verified --model
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
+    cursor)
+      # cursor-agent has no standalone effort flag; reasoning effort is folded into
+      # the --model slug by model_flag_for_harness. Emit nothing so __EFFORTFLAG__
+      # stays empty.
+      : ;;
   esac
 }
 
@@ -913,6 +948,45 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;
+    cursor*)
+      # cursor-agent fires a project-level "stop" hook when the agent loop ends -
+      # once per turn, the clean equivalent of claude's Stop hook (verified,
+      # cursor-agent 2026.07.01). cursor LAYERS project hooks on top of the
+      # user-level ~/.cursor/hooks.json (Cursor docs: "project layered with user"),
+      # so this per-worktree .cursor/hooks.json adds firstmate's turn-end signal
+      # WITHOUT displacing any global integration hook (e.g. herdr's sessionStart
+      # agent-session reporting, which powers herdr's native busy-state for cursor).
+      # The stop command touches the turn-end file and prints nothing, so cursor's
+      # optional stop-hook followup (triggered only by a {"followup_message":...}
+      # on stdout) never fires. Kept out of git via info/exclude like the other
+      # worktree hooks. If the worktree already ships its own .cursor/hooks.json,
+      # merge firstmate's stop command into it (jq) instead of clobbering the
+      # project's hooks; fall back to a fresh file when jq is unavailable or the
+      # existing file is unparseable.
+      mkdir -p "$WT/.cursor"
+      cursor_hooks="$WT/.cursor/hooks.json"
+      cursor_cmd="touch $(shell_quote "$TURNEND")"
+      cursor_wrote=0
+      if [ -f "$cursor_hooks" ] && command -v jq >/dev/null 2>&1 \
+         && jq -e . "$cursor_hooks" >/dev/null 2>&1; then
+        cursor_tmp=$(mktemp "$WT/.cursor/hooks.json.XXXXXX")
+        if jq --arg cmd "$cursor_cmd" \
+             '.version = (.version // 1)
+              | .hooks = (.hooks // {})
+              | .hooks.stop = ((.hooks.stop // []) + [{"command": $cmd}])' \
+             "$cursor_hooks" > "$cursor_tmp" 2>/dev/null; then
+          mv "$cursor_tmp" "$cursor_hooks"
+          cursor_wrote=1
+        else
+          rm -f "$cursor_tmp"
+        fi
+      fi
+      if [ "$cursor_wrote" -eq 0 ]; then
+        printf '{"version":1,"hooks":{"stop":[{"command":"%s"}]}}\n' \
+          "$(json_escape "$cursor_cmd")" > "$cursor_hooks"
+      fi
+      exclude_path '.cursor/hooks.json'
+      ;;
   esac
 fi
 
@@ -978,7 +1052,7 @@ META_WINDOW=$T
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
+MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL" "$EFFORT")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
