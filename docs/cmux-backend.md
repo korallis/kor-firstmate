@@ -17,7 +17,7 @@ Prerequisites:
 
 - The cmux app itself, installed from [cmux.com](https://cmux.com) or `brew install --cask cmux`, version 0.64.17 or newer.
 - `jq`, required to parse cmux's JSON output: `brew install jq` (or your platform's package manager).
-- The same universal requirements as tmux (a verified crew harness, git with GitHub auth, node, treehouse, no-mistakes, gh-axi, chrome-devtools-axi, and lavish-axi); treehouse still provides the worktree, cmux only provides the session.
+- The same universal requirements as tmux (a verified non-cursor crew harness, git with GitHub auth, node, treehouse, no-mistakes, gh-axi, chrome-devtools-axi, and lavish-axi); treehouse still provides the worktree, cmux only provides the session.
 - The cmux CLI binary is not guaranteed to be on `PATH` after a plain app install (see "CLI is not on PATH by default" below) - the adapter falls back to the well-known bundle path automatically, so this is not a blocker, just something to be aware of if you want to run `cmux` yourself from a shell.
 
 **One-time socket access setup (required, not optional):** cmux's control socket defaults to `automation.socketControlMode: "cmuxOnly"`, which rejects any CLI process not spawned inside cmux itself - firstmate always drives cmux from an external shell, so this must be changed before `backend=cmux` can work at all.
@@ -61,7 +61,7 @@ You do not need to bring the window forward for routine supervision: `bin/fm-pee
 Verify it works by spawning a trivial task with `--backend cmux` and confirming the task's meta records `backend=cmux` plus `cmux_workspace_id=` and `cmux_surface_id=`.
 The cmux sidebar should show a new `fm-firstmate-<8hex>-<id>` workspace in the primary home.
 
-Limitations: cmux is experimental, macOS-only, GUI-first (never viable for a headless/CI/SSH-only firstmate instance), has no native busy-state signal, and `--secondmate` spawns are refused until a per-home design exists - see "Known gaps left for a follow-up" at the end of this document.
+Limitations: cmux is experimental, macOS-only, GUI-first (never viable for a headless/CI/SSH-only firstmate instance), refuses `cursor` until cmux-specific cursor submit verification exists, has no native busy-state signal, and `--secondmate` spawns are refused until a per-home design exists - see "Known gaps left for a follow-up" at the end of this document.
 
 ## Status: experimental
 
@@ -70,6 +70,7 @@ Select it by putting `cmux` in a local `config/backend` file, by exporting `FM_B
 GUI-first and macOS-only stay unchanged by that: cmux is never a candidate for a headless/CI/SSH-only instance, because auto-detection can only fire from inside a live cmux terminal in the first place, which such an instance never is.
 Absent `backend=` in a task's meta always means `tmux`; only a cmux task ever carries an explicit `backend=cmux` line.
 A cmux spawn refuses loudly if the `cmux` CLI cannot be found, the installed version is older than the verified minimum (0.64), or the control socket is unreachable/unauthenticated (`fm_backend_cmux_version_check`, `fm_backend_cmux_ensure_running`).
+It also refuses the `cursor` harness, whose submit verification is implemented only for tmux/herdr today.
 
 ## Runtime auto-detection
 
