@@ -122,6 +122,23 @@ test_cursor_base_slug_without_effort() {
   pass "cursor passes the bare base slug when no effort is requested"
 }
 
+test_cursor_non_claude_model_omits_effort_suffix() {
+  local rec out status launch
+  rec=$(make_spawn_case launch-nonclaude-effort)
+  read_case_record "$rec"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --model composer-2.5 --effort high)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with a non-Claude model and effort should succeed"
+  assert_grep "effort=high" "$HOME_DIR/state/$ID.meta" "meta missing effort for non-Claude cursor model"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force --model 'composer-2.5' \"\$(cat " \
+    "cursor launch should pass the bare non-Claude slug even when effort is requested"
+  assert_not_contains "$launch" "composer-2.5-high" "cursor launch must not append effort to non-Claude slugs"
+  pass "cursor omits unsupported effort suffixes for non-Claude model slugs"
+}
+
 test_cursor_no_model_omits_flag() {
   local rec out status launch
   rec=$(make_spawn_case launch-nomodel)
@@ -191,6 +208,55 @@ test_cursor_merges_existing_project_hooks() {
   pass "cursor merges its stop hook into an existing project hooks.json instead of clobbering it"
 }
 
+test_cursor_replaces_prior_firstmate_stop_hook() {
+  local rec out status hooks count
+  rec=$(make_spawn_case hook-replace)
+  read_case_record "$rec"
+  command -v jq >/dev/null 2>&1 || { pass "cursor hook replacement skipped (jq unavailable)"; return; }
+
+  mkdir -p "$WT_DIR/.cursor"
+  printf '{"version":1,"hooks":{"stop":[{"command":"touch /tmp/old-task.turn-ended"},{"command":"./project-stop.sh"}]}}\n' \
+    > "$WT_DIR/.cursor/hooks.json"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" cursor)
+  status=$?
+  expect_code 0 "$status" "cursor spawn should succeed while replacing a prior firstmate stop hook"
+
+  hooks="$WT_DIR/.cursor/hooks.json"
+  jq -e '.hooks.stop[] | select(.command == "./project-stop.sh")' "$hooks" >/dev/null \
+    || fail "cursor hook replacement removed the project stop hook"
+  jq -e --arg id "$ID" '.hooks.stop[] | select(.command | contains($id + ".turn-ended"))' "$hooks" >/dev/null \
+    || fail "cursor hook replacement did not add the current task stop hook"
+  count=$(jq '[.hooks.stop[].command | select(contains("turn-ended"))] | length' "$hooks")
+  [ "$count" = 1 ] || fail "cursor hook replacement left $count turn-ended stop hooks"
+  pass "cursor replaces stale firstmate stop hooks instead of stacking them"
+}
+
+test_cursor_skips_tracked_project_hooks() {
+  local rec out status hooks
+  rec=$(make_spawn_case hook-tracked)
+  read_case_record "$rec"
+
+  mkdir -p "$WT_DIR/.cursor"
+  printf '{"version":1,"hooks":{"afterFileEdit":[{"command":"./format.sh"}]}}\n' \
+    > "$WT_DIR/.cursor/hooks.json"
+  git -C "$WT_DIR" add .cursor/hooks.json
+  git -C "$WT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm tracked-hooks
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" cursor)
+  status=$?
+  expect_code 0 "$status" "cursor spawn should still succeed when a tracked project hook exists"
+  assert_contains "$out" "warning: cursor stop hook not installed" \
+    "cursor spawn should warn when refusing to mutate a tracked project hook"
+
+  hooks="$WT_DIR/.cursor/hooks.json"
+  assert_grep './format.sh' "$hooks" "tracked cursor project hook was not preserved"
+  assert_no_grep 'turn-ended' "$hooks" "tracked cursor project hook was mutated with firstmate stop state"
+  git -C "$WT_DIR" status --porcelain > "$CASE_DIR/status.txt"
+  [ ! -s "$CASE_DIR/status.txt" ] || fail "tracked cursor project hook was dirtied"
+  pass "cursor skips tracked project hooks instead of mutating them"
+}
+
 test_cursor_teardown_is_clean() {
   local rec out status
   rec=$(make_spawn_case teardown)
@@ -204,6 +270,7 @@ test_cursor_teardown_is_clean() {
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
     PATH="$FAKEBIN_DIR:$PATH" "$TEARDOWN" "$ID" --force >/dev/null 2>&1 \
     || fail "cursor teardown failed"
+  assert_absent "$WT_DIR/.cursor/hooks.json" "cursor hook survived teardown"
   assert_absent "$HOME_DIR/state/$ID.meta" "cursor meta survived teardown"
   pass "cursor worktree tears down cleanly (the excluded hook never blocks the dirty check)"
 }
@@ -237,13 +304,37 @@ SH
   pass "fm-harness.sh detects cursor from the cursor-agent process ancestry"
 }
 
+test_fm_lock_recognizes_cursor_holder() {
+  local home fakebin out
+  home="$TMP_ROOT/lock-home"
+  fakebin=$(fm_fakebin "$TMP_ROOT/lock-fake")
+  mkdir -p "$home/state"
+  printf '%s\n' "$$" > "$home/state/.lock"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"comm="*) printf '%s\n' '/usr/local/bin/cursor-agent'; exit 0 ;;
+  *"args="*) printf '%s\n' 'cursor-agent'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/ps"
+  out=$(FM_HOME="$home" PATH="$fakebin:$PATH" "$ROOT/bin/fm-lock.sh" status)
+  assert_contains "$out" "lock: held by live harness pid" "fm-lock did not recognize cursor as a live holder"
+  pass "fm-lock recognizes cursor harness processes"
+}
+
 test_cursor_launch_template_folds_model_and_effort
 test_cursor_base_slug_without_effort
+test_cursor_non_claude_model_omits_effort_suffix
 test_cursor_no_model_omits_flag
 test_cursor_installs_project_stop_hook
 test_cursor_merges_existing_project_hooks
+test_cursor_replaces_prior_firstmate_stop_hook
+test_cursor_skips_tracked_project_hooks
 test_cursor_teardown_is_clean
 test_fm_harness_detects_cursor_env_marker
 test_fm_harness_detects_cursor_ancestry
+test_fm_lock_recognizes_cursor_holder
 
 echo "# all fm-cursor-harness tests passed"

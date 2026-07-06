@@ -437,14 +437,19 @@ model_flag_for_harness() {
       # validator - verified only exact slugs from `cursor-agent models` are
       # accepted, in both -p and interactive modes - so effort is folded into the
       # slug here and effort_flag_for_harness emits nothing for cursor. firstmate's
-      # effort vocab (low|medium|high|xhigh|max) maps 1:1 onto the Claude 1M
-      # families (claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-opus-4-7),
-      # whose exact slugs use those five tokens. For gpt-5.5 (none/extra-high, no
-      # xhigh/max), gemini, grok, and composer, bake the desired variant into
-      # --model and leave effort default (see the harness-adapters skill).
+      # effort vocab (low|medium|high|xhigh|max) maps 1:1 only onto the Claude
+      # 1M families (claude-opus-4-8, claude-sonnet-5, claude-fable-5,
+      # claude-opus-4-7), whose exact slugs use those five tokens. For gpt-5.5
+      # (none/extra-high, no xhigh/max), gemini, grok, and composer, bake the
+      # desired variant into --model and leave effort default (see the
+      # harness-adapters skill).
       local slug=$model
-      case "$effort" in
-        low|medium|high|xhigh|max) slug="${model}-${effort}" ;;
+      case "$model" in
+        claude-opus-4-8|claude-sonnet-5|claude-fable-5|claude-opus-4-7)
+          case "$effort" in
+            low|medium|high|xhigh|max) slug="${model}-${effort}" ;;
+          esac
+          ;;
       esac
       printf -- '--model %s ' "$(shell_quote "$slug")"
       ;;
@@ -961,31 +966,40 @@ EOF
       # on stdout) never fires. Kept out of git via info/exclude like the other
       # worktree hooks. If the worktree already ships its own .cursor/hooks.json,
       # merge firstmate's stop command into it (jq) instead of clobbering the
-      # project's hooks; fall back to a fresh file when jq is unavailable or the
-      # existing file is unparseable.
+      # project's hooks when the file is untracked and parseable.
       mkdir -p "$WT/.cursor"
       cursor_hooks="$WT/.cursor/hooks.json"
       cursor_cmd="touch $(shell_quote "$TURNEND")"
       cursor_wrote=0
-      if [ -f "$cursor_hooks" ] && command -v jq >/dev/null 2>&1 \
-         && jq -e . "$cursor_hooks" >/dev/null 2>&1; then
-        cursor_tmp=$(mktemp "$WT/.cursor/hooks.json.XXXXXX")
-        if jq --arg cmd "$cursor_cmd" \
-             '.version = (.version // 1)
-              | .hooks = (.hooks // {})
-              | .hooks.stop = ((.hooks.stop // []) + [{"command": $cmd}])' \
-             "$cursor_hooks" > "$cursor_tmp" 2>/dev/null; then
-          mv "$cursor_tmp" "$cursor_hooks"
-          cursor_wrote=1
+      if git -C "$WT" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1; then
+        echo "warning: cursor stop hook not installed: .cursor/hooks.json is tracked by the project" >&2
+      elif [ -f "$cursor_hooks" ]; then
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "warning: cursor stop hook not installed: existing .cursor/hooks.json requires jq to merge safely" >&2
+        elif ! jq -e . "$cursor_hooks" >/dev/null 2>&1; then
+          echo "warning: cursor stop hook not installed: existing .cursor/hooks.json is not valid JSON" >&2
         else
-          rm -f "$cursor_tmp"
+          cursor_tmp=$(mktemp "$WT/.cursor/hooks.json.XXXXXX")
+          if jq --arg cmd "$cursor_cmd" \
+               '.version = (.version // 1)
+                | .hooks = (if (.hooks | type) == "object" then .hooks else {} end)
+                | .hooks.stop = (((.hooks.stop // []) | if type == "array" then . else [] end)
+                    | map(select(((.command? // "") | test("\\.turn-ended")) | not))
+                    + [{"command": $cmd}])' \
+               "$cursor_hooks" > "$cursor_tmp" 2>/dev/null; then
+            mv "$cursor_tmp" "$cursor_hooks"
+            cursor_wrote=1
+          else
+            rm -f "$cursor_tmp"
+            echo "warning: cursor stop hook not installed: could not merge existing .cursor/hooks.json" >&2
+          fi
         fi
-      fi
-      if [ "$cursor_wrote" -eq 0 ]; then
+      else
         printf '{"version":1,"hooks":{"stop":[{"command":"%s"}]}}\n' \
           "$(json_escape "$cursor_cmd")" > "$cursor_hooks"
+        cursor_wrote=1
       fi
-      exclude_path '.cursor/hooks.json'
+      [ "$cursor_wrote" -eq 0 ] || exclude_path '.cursor/hooks.json'
       ;;
   esac
 fi

@@ -48,7 +48,7 @@ FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctr
 # reaching here; this default is the defensive backstop for the terminals/versions
 # where the cursor DOES rest on the placeholder row. cursor-specific text, so it is
 # inert for every other harness's composer (verified cursor-agent 2026.07.01).
-FM_TMUX_COMPOSER_IDLE_RE_DEFAULT='Add a follow-up'
+FM_TMUX_COMPOSER_IDLE_RE_DEFAULT='^(→ )?Add a follow-up$'
 
 # fm_tmux_strip_ghost: remove dim/faint (ANSI SGR 2) styled runs from one captured
 # composer line, then drop any remaining escape sequences, leaving only the plain,

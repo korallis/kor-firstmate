@@ -58,7 +58,7 @@ The supported launch-profile flags below were verified locally on 2026-06-30 wit
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>` | Verified on grok 0.2.73. `--effort` parses too, but firstmate's profile axis is reasoning effort. `--reasoning-effort max` is rejected, so `max` is omitted. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh>` | Verified on pi 0.80.2. `max` prints an invalid-thinking warning, so firstmate omits Pi effort when the requested effort is `max`. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
-| cursor | `--model <slug>` | folded into the `--model` slug as a `-<effort>` suffix | Verified on cursor-agent 2026.07.01. cursor has ONE `--model` flag and no standalone effort flag; effort is a slug suffix (`claude-opus-4-8-high`). The bracket form `slug[effort=high]` is REJECTED - only exact slugs from `cursor-agent models` are accepted. `fm-spawn` appends `-<effort>` for `low\|medium\|high\|xhigh\|max`, which are exact slugs for the Claude 1M families; see the cursor section for the per-family vocab. |
+| cursor | `--model <slug>` | folded into the `--model` slug as a `-<effort>` suffix only for compatible Claude 1M base slugs | Verified on cursor-agent 2026.07.01. cursor has ONE `--model` flag and no standalone effort flag; effort is a slug suffix (`claude-opus-4-8-high`). The bracket form `slug[effort=high]` is REJECTED - only exact slugs from `cursor-agent models` are accepted. `fm-spawn` appends `-<effort>` only for the Claude 1M base slugs whose exact variants use `low\|medium\|high\|xhigh\|max`; for other slugs, it records `effort=` in meta and launches the bare `--model` slug. |
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
@@ -218,20 +218,23 @@ Accept with `bin/fm-send.sh <window> --key a` (or Enter on the highlighted optio
 
 **Model and effort slugs.**
 `--model` accepts only EXACT slugs from `cursor-agent models`; the parameterized bracket form `'claude-opus-4-8[effort=high]'` is REJECTED in both `-p` and interactive modes (verified: it errors "Cannot use this model" and lists the valid slugs).
-So `fm-spawn` folds firstmate's effort axis into the slug as a `-<effort>` suffix (`model_flag_for_harness`, `bin/fm-spawn.sh`); `effort_flag_for_harness` emits nothing for cursor.
+So `fm-spawn` folds firstmate's effort axis into the slug as a `-<effort>` suffix only for compatible Claude 1M base slugs (`model_flag_for_harness`, `bin/fm-spawn.sh`); `effort_flag_for_harness` emits nothing for cursor.
 firstmate's effort vocab `low|medium|high|xhigh|max` maps 1:1 onto the Claude 1M families - `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `claude-opus-4-7` - whose exact slugs use those five tokens, and the bare base slug is also valid (model default).
-For `gpt-5.5` the effort vocab is `none|low|medium|high|extra-high` (NO `xhigh`, NO `max` - `gpt-5.5-xhigh` is rejected), and `gemini-3.1-pro`, `grok-4.3`, and `composer-2.5` have no effort variants; for those, bake the desired variant into `--model` and leave `--effort` default.
+For `gpt-5.5` the effort vocab is `none|low|medium|high|extra-high` (NO `xhigh`, NO `max` - `gpt-5.5-xhigh` is rejected), and `gemini-3.1-pro`, `grok-4.3`, and `composer-2.5` have no effort variants; for those, bake the desired variant into `--model` and leave `--effort` default, or let `fm-spawn` omit the unsupported suffix while preserving `effort=` in meta.
 Verified base slugs (all accept a bare launch): `composer-2.5`, `claude-opus-4-8`, `claude-sonnet-5`, `gpt-5.5`, `gemini-3.1-pro`, `grok-4.3`.
 
 Turn-end hook: cursor fires a project-level `stop` hook when the agent loop ends, giving firstmate a precise per-turn wake instead of only stale-pane detection (verified: fired at each turn's completion and again after a mid-task steer).
 cursor LAYERS project hooks on top of the user-level `~/.cursor/hooks.json` (Cursor docs: "project layered with user"), so `fm-spawn` writes a per-worktree `<worktree>/.cursor/hooks.json` whose `stop` command touches this task's `state/<id>.turn-ended`, WITHOUT displacing any global integration hook (e.g. herdr's `sessionStart` agent-session reporting, or Orca's hooks).
 The stop command prints nothing, so cursor's optional stop-hook followup (triggered only by a `{"followup_message":...}` on stdout) never fires.
-The file is kept out of git via `info/exclude` like the other harnesses' worktree hooks; if the worktree already ships its own `.cursor/hooks.json`, `fm-spawn` merges its stop command in with `jq` rather than clobbering the project's hooks.
+The file is kept out of git via `info/exclude` like the other harnesses' worktree hooks.
+If `.cursor/hooks.json` is already tracked by the project, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
+If an existing untracked `.cursor/hooks.json` is valid JSON and `jq` is available, `fm-spawn` merges its current stop command while replacing any prior firstmate stop command that touched a `*.turn-ended` path.
+If an existing file is unparseable or `jq` is missing, `fm-spawn` leaves it untouched and warns instead of overwriting it.
 Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
 So `fm_tmux_composer_state` reads that (blank) row and classifies the pane empty - correct for idle, but it means typed-but-unsubmitted text on the composer row is NOT seen through `cursor_y` alone.
 Submit still works because `Enter` reliably submits in cursor (verified), so `fm_tmux_submit_core` reads "empty" as "landed" without false retries.
-As a defensive backstop for terminals/versions where the cursor DOES rest on the placeholder row, `FM_TMUX_COMPOSER_IDLE_RE_DEFAULT` (`bin/fm-tmux-lib.sh`) matches cursor's idle placeholder `Add a follow-up` so it never reads as pending input; the string is cursor-specific and inert for other harnesses.
+As a defensive backstop for terminals/versions where the cursor DOES rest on the placeholder row, `FM_TMUX_COMPOSER_IDLE_RE_DEFAULT` (`bin/fm-tmux-lib.sh`) exactly matches cursor's idle placeholder `Add a follow-up` with its optional arrow prompt so it never reads as pending input; the pattern is cursor-specific and inert for other harnesses.
 
 **Backend note.** Verified on the tmux reference backend. Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook. cursor's composer is borderless, so herdr's and Orca's structural composer detectors return `unknown` (handled leniently by `fm-send`).
