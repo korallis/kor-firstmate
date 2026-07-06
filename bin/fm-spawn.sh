@@ -441,22 +441,27 @@ model_flag_for_harness() {
       ;;
     cursor)
       # cursor-agent has ONE --model flag and expresses reasoning effort as a
-      # model-slug SUFFIX (--model 'claude-opus-4-8-high'), NOT a separate flag.
-      # The bracket form 'slug[effort=high]' is rejected by cursor's model
-      # validator - verified only exact slugs from `cursor-agent models` are
-      # accepted, in both -p and interactive modes - so effort is folded into the
-      # slug here and effort_flag_for_harness emits nothing for cursor. firstmate's
-      # effort vocab (low|medium|high|xhigh|max) maps 1:1 only onto the Claude
-      # 1M families (claude-opus-4-8, claude-sonnet-5, claude-fable-5,
-      # claude-opus-4-7), whose exact slugs use those five tokens. For gpt-5.5
-      # (none/extra-high, no xhigh/max), gemini, grok, and composer, bake the
-      # desired variant into --model and leave effort default (see the
-      # harness-adapters skill).
+      # model-slug SUFFIX, NOT a separate flag. The bracket form
+      # 'slug[effort=high]' is rejected by cursor's model validator - verified
+      # only exact slugs from `cursor-agent models` are accepted, in both -p and
+      # interactive modes - so effort is folded into the slug here and
+      # effort_flag_for_harness emits nothing for cursor. firstmate's effort vocab
+      # (low|medium|high|xhigh|max) maps 1:1 only onto the Claude 1M families
+      # (claude-opus-4-8, claude-sonnet-5, claude-fable-5, claude-opus-4-7). For
+      # these, a bare base slug plus effort resolves to the reasoning-ON THINKING
+      # slug '<base>-thinking-<effort>' (verified real slugs from
+      # `cursor-agent models`), because the bare '<base>-<effort>' slug is
+      # Cursor's "No Thinking" variant and firstmate defaults Claude to thinking.
+      # A fully-specified slug passed as --model still passes through verbatim, so
+      # the non-thinking '<base>-<effort>' and '-fast' variants stay reachable by
+      # naming the exact slug. For gpt-5.5 (none/extra-high, no xhigh/max), gemini,
+      # grok, and composer, bake the desired variant into --model and leave effort
+      # default (see the harness-adapters skill).
       local slug=$model
       case "$model" in
         claude-opus-4-8|claude-sonnet-5|claude-fable-5|claude-opus-4-7)
           case "$effort" in
-            low|medium|high|xhigh|max) slug="${model}-${effort}" ;;
+            low|medium|high|xhigh|max) slug="${model}-thinking-${effort}" ;;
           esac
           ;;
       esac

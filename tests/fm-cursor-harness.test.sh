@@ -150,11 +150,71 @@ test_cursor_launch_template_folds_model_and_effort() {
   assert_grep "effort=high" "$HOME_DIR/state/$ID.meta" "meta missing effort"
 
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "cursor-agent --force --model 'claude-opus-4-8-high' \"\$(cat " \
-    "cursor launch did not fold effort into the --model slug"
+  assert_contains "$launch" "cursor-agent --force --model 'claude-opus-4-8-thinking-high' \"\$(cat " \
+    "cursor launch did not fold effort into the reasoning-on -thinking- slug"
+  assert_not_contains "$launch" "claude-opus-4-8-high" \
+    "cursor launch must not emit the bare no-thinking base-slug+effort variant"
   assert_not_contains "$launch" "--effort" "cursor launch must not emit a standalone --effort flag"
   assert_not_contains "$launch" "[effort=" "cursor launch must not use the rejected bracket effort syntax"
-  pass "cursor launch folds effort into the --model slug as a suffix"
+  pass "cursor launch folds effort into the reasoning-on -thinking-<effort> slug"
+}
+
+test_cursor_claude_sonnet_folds_thinking_slug() {
+  local rec out status launch
+  rec=$(make_spawn_case launch-fold-sonnet)
+  read_case_record "$rec"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --model claude-sonnet-5 --effort medium)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with claude-sonnet-5 and effort should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force --model 'claude-sonnet-5-thinking-medium' \"\$(cat " \
+    "cursor launch did not fold claude-sonnet-5 effort into the reasoning-on -thinking- slug"
+  assert_not_contains "$launch" "claude-sonnet-5-medium'" \
+    "cursor launch must not emit the bare no-thinking claude-sonnet-5-medium variant"
+  pass "cursor folds claude-sonnet-5 + medium into claude-sonnet-5-thinking-medium"
+}
+
+test_cursor_explicit_full_slug_passes_through() {
+  local rec out status launch
+
+  # A fully-specified no-thinking Claude slug must pass through verbatim so the
+  # bare non-thinking variant stays reachable by naming the exact slug.
+  rec=$(make_spawn_case passthrough-claude-no-thinking)
+  read_case_record "$rec"
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --model claude-opus-4-8-high)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with an explicit claude-opus-4-8-high slug should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force --model 'claude-opus-4-8-high' \"\$(cat " \
+    "cursor launch did not pass an explicit no-thinking Claude slug through verbatim"
+  assert_not_contains "$launch" "claude-opus-4-8-thinking" \
+    "cursor launch must not inject -thinking- into an explicitly-named slug"
+
+  # A composer slug (non-Claude) passes through verbatim.
+  rec=$(make_spawn_case passthrough-composer)
+  read_case_record "$rec"
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --model composer-2.5)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with an explicit composer-2.5 slug should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force --model 'composer-2.5' \"\$(cat " \
+    "cursor launch did not pass composer-2.5 through verbatim"
+
+  # A gpt-5.5 variant slug passes through verbatim.
+  rec=$(make_spawn_case passthrough-gpt)
+  read_case_record "$rec"
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --model gpt-5.5-high)
+  status=$?
+  expect_code 0 "$status" "cursor spawn with an explicit gpt-5.5-high slug should succeed"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "cursor-agent --force --model 'gpt-5.5-high' \"\$(cat " \
+    "cursor launch did not pass gpt-5.5-high through verbatim"
+  pass "cursor passes fully-specified model slugs through unchanged"
 }
 
 test_cursor_base_slug_without_effort() {
@@ -620,6 +680,8 @@ SH
 }
 
 test_cursor_launch_template_folds_model_and_effort
+test_cursor_claude_sonnet_folds_thinking_slug
+test_cursor_explicit_full_slug_passes_through
 test_cursor_base_slug_without_effort
 test_cursor_non_claude_model_omits_effort_suffix
 test_cursor_no_model_omits_flag
