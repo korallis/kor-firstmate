@@ -213,6 +213,9 @@ the marker lets firstmate distinguish it from a real captain message.
   supervisor backends; the daemon refuses loudly at startup instead of
   misapplying tmux primitives to a pane that isn't one
   (docs/herdr-backend.md "Away-mode daemon: herdr supervisor-pane support").
+  Cursor is a narrower exception: cursor crewmate spawns are verified on herdr,
+  but a cursor primary is still accepted as a supervisor only on tmux until the
+  herdr cursor-supervisor path is live-verified.
 
 ## Reliability properties
 

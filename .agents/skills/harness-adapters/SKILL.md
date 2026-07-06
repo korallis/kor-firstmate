@@ -244,7 +244,10 @@ It returns `empty` when that row is blank after the prompt, exactly `Add a follo
 That restores Enter retry for slash autocomplete while avoiding false positives from non-cursor arrow-prefixed output and avoiding the off-row `#{cursor_y}` footer.
 There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
 
-**Backend note.** Verified on the tmux reference backend.
-`fm-spawn` refuses cursor on non-tmux backends because cursor submit verification is only implemented for tmux's harness-scoped `→ ` row detector.
-The away-mode supervisor path applies the same gate: a cursor primary is only verified when `FM_SUPERVISOR_BACKEND` resolves to tmux.
-herdr, zellij, Orca, and cmux cursor support are unverified follow-ups.
+**Backend note.** Verified on the tmux reference backend and on the herdr backend.
+The herdr composer reader (`fm_backend_herdr_composer_state`, `bin/backends/herdr.sh`) recognizes cursor's borderless `→ ` arrow row structurally alongside grok's bordered box, so a cursor pane on herdr reads empty/pending correctly and `fm-send`'s Enter retry lands a slash command instead of stopping on the first autocomplete-selecting Enter - see docs/herdr-backend.md "Cursor on herdr" for the live verification (cursor-agent 2026.07.01, herdr 0.7.1 protocol 14).
+`fm-spawn` allows cursor on tmux and herdr and still refuses it on zellij/orca/cmux, whose cursor submit verification is not yet implemented.
+The away-mode supervisor path is a separate gate still limited to tmux: a cursor primary is only verified when `FM_SUPERVISOR_BACKEND` resolves to tmux (its herdr path reuses the same shared composer reader but has not been live-verified as a supervisor).
+zellij, Orca, and cmux cursor support are unverified follow-ups.
+
+Live-verified herdr idle placeholders differ from tmux: besides `Add a follow-up` (between turns), cursor's fresh welcome screen shows `→ Plan, search, build anything` before any input, and `fm_backend_herdr_cursor_composer_classify` treats both as empty.

@@ -889,6 +889,119 @@ test_composer_state_unknown_when_no_composer_row_found() {
   pass "fm_backend_herdr_composer_state: reports unknown when no border-delimited composer row is found"
 }
 
+# --- composer_state: cursor borderless arrow-row classification --------------
+# Cursor's interactive composer draws a BORDERLESS "→ Add a follow-up" row (no
+# border glyph), unlike grok's bordered box. The structural reader recognizes it
+# as its own composer-row kind and classifies it with cursor's rules, so a
+# cursor pane on herdr returns empty/pending correctly (verified live against
+# cursor-agent 2026.07.01 - docs/herdr-backend.md "Cursor on herdr").
+
+test_composer_state_cursor_idle_placeholder_is_empty() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-idle"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  cwd ~/proj\n\n  → Add a follow-up\n\n  cursor-agent\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "cursor's 'Add a follow-up' idle placeholder should read empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: cursor's borderless 'Add a follow-up' idle row reads empty"
+}
+
+# Live-verified on cursor-agent 2026.07.01 on herdr: the fresh welcome screen
+# (before any input this session) shows "→ Plan, search, build anything" as the
+# empty-composer placeholder, distinct from the between-turns "Add a follow-up".
+# Both are idle ghost text and must read empty, never pending.
+test_composer_state_cursor_welcome_placeholder_is_empty() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-welcome"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  Cursor Agent\n\n ▄▄▄▄▄▄▄▄▄▄▄▄\n  → Plan, search, build anything\n ▀▀▀▀▀▀▀▀▀▀▀▀\n  Opus 4.8   Run Everything\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "cursor's welcome-screen 'Plan, search, build anything' placeholder should read empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: cursor's welcome-screen 'Plan, search, build anything' placeholder reads empty"
+}
+
+test_composer_state_cursor_bare_arrow_is_empty() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-bare"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  cwd ~/proj\n\n  →\n\n  cursor-agent\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "cursor's bare '→' arrow row (nothing typed) should read empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: cursor's bare '→' arrow row reads empty"
+}
+
+test_composer_state_cursor_busy_footer_is_empty() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-busy"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  # Mid-turn, cursor draws its interrupt hint on the same arrow row; this is a
+  # busy footer, not pending user input, so it must read empty (submit landed).
+  printf '  cwd ~/proj\n\n  → Add a follow-up   ctrl+c to stop\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = empty ] || fail "cursor's 'Add a follow-up ... ctrl+c to stop' busy footer should read empty, got '$out'"
+  pass "fm_backend_herdr_composer_state: cursor's busy footer on the arrow row reads empty, not pending"
+}
+
+test_composer_state_cursor_real_text_is_pending() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-pending"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  cwd ~/proj\n\n  → hello captain\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "real unsubmitted text on cursor's arrow row should read pending, got '$out'"
+  pass "fm_backend_herdr_composer_state: real text on cursor's arrow row reads pending"
+}
+
+# The core fix: cursor's slash-command autocomplete leaves the selected command
+# text sitting on the arrow row after the popup-closing first Enter. That row
+# still holds real, unsubmitted text ("/no-mistakes"), so it must read pending
+# and the send-retry loop issues the actually-submitting second Enter - the same
+# failure class as the 2026-07-03 grok incident, on cursor's borderless row.
+test_composer_state_cursor_slash_autocomplete_is_pending() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-slash"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  cwd ~/proj\n\n  → /no-mistakes\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "a slash command left on the arrow row after autocomplete's first Enter must still read pending, got '$out'"
+  pass "fm_backend_herdr_composer_state: a slash command on cursor's arrow row after autocomplete reads pending (the fix)"
+}
+
+# The arrow row is bottom-anchored: a bordered box earlier in scrollback (e.g. a
+# rendered popup or a prior grok pane's leftover) must never outrank the real
+# cursor composer row below it.
+test_composer_state_cursor_arrow_wins_over_earlier_border_row() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-cursor-lastwins"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  ╭────────────╮\n  │ some popup │\n  ╰────────────╯\n\n  → /no-mistakes\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "the bottom-anchored cursor arrow row should win over an earlier bordered row, got '$out'"
+  pass "fm_backend_herdr_composer_state: the last (bottom-anchored) cursor arrow row wins over an earlier bordered row"
+}
+
+# A bordered grok composer whose typed text happens to START with "→" is still
+# a border row, classified by the border rules - the row kind is decided by the
+# ORIGINAL line shape, never by post-strip content, so cursor detection never
+# poaches a grok pane.
+test_composer_state_bordered_arrow_content_stays_border_row() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/composer-bordered-arrow"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '  ╭──────────────────╮\n  │ ❯ → drawn arrow  │\n  ╰──────── Composer ╯\n\n  Enter:send\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$( PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_composer_state default:w1:p2' "$ROOT" )
+  [ "$out" = pending ] || fail "a bordered grok composer with '→' in its text should read as a border row (pending), got '$out'"
+  pass "fm_backend_herdr_composer_state: a bordered row whose text contains '→' stays a border row, never poached by cursor detection"
+}
+
 # --- send_text_submit: structural composer-row verify-and-retry --------------
 
 test_send_text_submit_detects_landed_send() {
@@ -1323,6 +1436,14 @@ test_composer_state_real_text_is_pending
 test_composer_state_popup_placeholder_fill_is_pending
 test_composer_state_unknown_on_capture_failure
 test_composer_state_unknown_when_no_composer_row_found
+test_composer_state_cursor_idle_placeholder_is_empty
+test_composer_state_cursor_welcome_placeholder_is_empty
+test_composer_state_cursor_bare_arrow_is_empty
+test_composer_state_cursor_busy_footer_is_empty
+test_composer_state_cursor_real_text_is_pending
+test_composer_state_cursor_slash_autocomplete_is_pending
+test_composer_state_cursor_arrow_wins_over_earlier_border_row
+test_composer_state_bordered_arrow_content_stays_border_row
 test_send_text_submit_detects_landed_send
 test_send_text_submit_detects_swallowed_enter
 test_send_text_submit_popup_autocomplete_requires_second_enter

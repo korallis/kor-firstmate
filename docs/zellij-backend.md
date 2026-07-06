@@ -15,7 +15,7 @@ Prerequisites:
 
 - `zellij` itself, version 0.44 or newer (installed 0.44.0 verified) - see [zellij.dev](https://zellij.dev) for install instructions.
 - `jq`, required to parse zellij's JSON output: `brew install jq` (or your platform's package manager).
-- The same universal requirements as tmux (a verified crew harness, git with GitHub auth, node, treehouse, no-mistakes, gh-axi, chrome-devtools-axi, and lavish-axi); treehouse still provides the worktree, zellij only provides the session.
+- The same universal requirements as tmux (a verified non-cursor crew harness, git with GitHub auth, node, treehouse, no-mistakes, gh-axi, chrome-devtools-axi, and lavish-axi); treehouse still provides the worktree, zellij only provides the session.
 
 Select zellij by putting `zellij` in a local `config/backend` file - the durable way to pick it - or by exporting `FM_BACKEND=zellij` when you launch your harness for a one-off session; telling the first mate in chat to use zellij also works.
 Unlike tmux and herdr, zellij is **never** auto-detected - it always requires an explicit choice.
@@ -31,7 +31,7 @@ You do not need to attach for routine supervision: `bin/fm-peek.sh fm-<id>` read
 
 Verify it works by spawning a trivial task with `--backend zellij` and confirming the task's meta records `backend=zellij` plus `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`; attaching to the session should show the new home-scoped tab title, such as `fm-firstmate-<8hex>-<id>`.
 
-Limitations: zellij is experimental, has no per-home workspace split (all tasks share one tab bar, unlike herdr), is not yet used for `bin/fm-bootstrap.sh`'s required-tools list (the version/tool gate happens at spawn time instead), and carries the known gaps documented below (no native busy-state signal, and a narrow focus-steal race on tab creation) - see "Known gaps left for a follow-up" at the end of this document.
+Limitations: zellij is experimental, refuses `cursor` until zellij-specific cursor submit verification exists, has no per-home workspace split (all tasks share one tab bar, unlike herdr), is not yet used for `bin/fm-bootstrap.sh`'s required-tools list (the version/tool gate happens at spawn time instead), and carries the known gaps documented below (no native busy-state signal, and a narrow focus-steal race on tab creation) - see "Known gaps left for a follow-up" at the end of this document.
 
 ## Status: experimental
 
@@ -40,6 +40,7 @@ Select it by putting `zellij` in a local `config/backend` file, by exporting `FM
 Unlike tmux and herdr, zellij is **never** selected by runtime auto-detection: the design report's Open Question #2 recommends starting with a dedicated background session for predictability rather than reusing whatever zellij session firstmate itself might be running inside, and empirical verification below (see "Focus-steal on new-tab") confirms that recommendation was correct - reusing an ambient session a human might be attached to would risk yanking their view on every spawn.
 Absent `backend=` in a task's meta always means `tmux`; only a zellij task ever carries an explicit `backend=zellij` line.
 A zellij spawn refuses loudly if `zellij` or `jq` is missing, or if the installed zellij's version is older than the verified minimum, 0.44 (`fm_backend_zellij_version_check`).
+It also refuses the `cursor` harness, whose submit verification is implemented only for tmux/herdr today.
 
 ## Worktree provider stays treehouse
 

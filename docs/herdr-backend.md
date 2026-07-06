@@ -256,6 +256,40 @@ A dedicated composer-state or cursor-row read primitive is still a candidate ups
 
 All implemented backends expose the identical caller-facing verdict vocabulary (`empty`, `pending`, `unknown`, `send-failed`), so `fm-send.sh` needs no backend-specific branching at all.
 
+## Cursor on herdr (verified 2026-07-06)
+
+The cursor harness (`cursor-agent`) is verified on herdr, in addition to its original tmux verification.
+`fm-spawn.sh` therefore allows `--harness cursor` on the herdr backend while still refusing it on zellij/orca/cmux, whose cursor submit verification is not yet implemented.
+
+The gap that had to close first: cursor's interactive composer draws a BORDERLESS `→ Add a follow-up` row, not a bordered box.
+The structural border-row reader above never matched it, so `fm_backend_herdr_composer_state` returned `unknown` for every cursor pane, and `fm-send` treats `unknown` as delivered.
+A slash command (for example `/no-mistakes`) could then stop after the first Enter that only selected autocomplete, never issuing the second, actually-submitting Enter - the same failure class as the 2026-07-03 grok incident above, on cursor's borderless row.
+
+The fix keeps the same structural-classification approach.
+`fm_backend_herdr_composer_state` now also recognizes the cursor arrow row by its leading `→` on an otherwise borderless line, and classifies it with cursor's own rules (`fm_backend_herdr_cursor_composer_classify`, mirroring tmux's `fm_tmux_cursor_composer_state`).
+A border row and an arrow row are told apart by the ORIGINAL trimmed line shape, never by post-strip content, so a bordered grok composer whose text happens to start with `→` is still read as a border row.
+Whichever composer candidate appears last in the capture wins (the composer is bottom-anchored), so a cursor pane reads by the cursor rules and a grok pane by the border rules with no harness argument threaded through - the reader stays a pure `<target>` function used unchanged by both the send path and the away-mode daemon.
+
+The arrow row reads `empty` when it holds only the prompt arrow, one of cursor's idle placeholders, or its busy footer, and `pending` for any other real, unsubmitted text.
+This verification covers cursor crewmate/scout spawns and the `fm-send` submit path on herdr.
+It does not lift the separate away-mode supervisor gate: a cursor primary on herdr still refuses `/afk` supervisor injection until that supervisor path is live-verified for cursor.
+
+**Live verification (real herdr, isolated throwaway session).**
+Versions: herdr 0.7.1, client protocol 14; cursor-agent 2026.07.01-41b2de7; macOS aarch64; 2026-07-06.
+A real `cursor-agent --force` pane was launched in a throwaway `HERDR_SESSION`, its Workspace Trust dialog accepted with `a`, and the composer read at each state with `fm_backend_herdr_composer_state`:
+
+- Fresh welcome screen: the composer row is `→ Plan, search, build anything` - read `empty` (idle placeholder).
+- After typing `/no-mistakes` unsubmitted: the row is `→ /no-mistakes` - read `pending`, so the retry loop keeps sending Enter.
+- After the submit landed: cursor drew `→ Add a follow-up   ctrl+c to stop` on the same row - read `empty` (busy footer, a landed submit).
+
+Then `fm_backend_herdr_send_text_submit "$TARGET" "/no-mistakes" ...` (the exact path `fm-send` drives) returned `empty` and the pane went to a working state (`fm_backend_herdr_busy_state` = `busy`, footer `Running`).
+The pane then showed cursor genuinely invoking the skill (`I'll run the no-mistakes validation gate ...`, `$ no-mistakes axi exit 1`, `/no-mistakes bare mode validates`), which errored only because the throwaway repo was not no-mistakes-initialized - proving the slash command was actually SUBMITTED and executed, not merely autocompleted.
+
+**Idle-placeholder note.**
+Cursor shows two empty-composer placeholders live on herdr: `Add a follow-up` (between turns, matching what tmux saw) and `Plan, search, build anything` (the fresh welcome screen, before any input this session).
+`fm_backend_herdr_cursor_composer_classify` treats both as `empty`, and its busy-footer match covers the `... ctrl+c to stop` interrupt-hint form.
+Coverage lives in `tests/fm-backend-herdr.test.sh`'s cursor composer-row section.
+
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
 `HERDR_SESSION=<name>` is the adapter's normal way to select a named herdr session for NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls all still use it (via `fm_backend_herdr_cli`, below).
@@ -348,6 +382,7 @@ Classification policy, batching, the max-defer escape, the `FM_INJECT_MARK` sent
 **Discovery.** `FM_SUPERVISOR_TARGET` remains the explicit override, now accepting either a tmux target or a herdr `"<session>:<pane-id>"` target.
 A new `FM_SUPERVISOR_BACKEND` override (`tmux`|`herdr`) resolves independently, mirroring `bin/fm-backend.sh`'s own `fm_backend_detect`: `$TMUX_PANE` set selects tmux (even nested inside herdr, matching the innermost-first rule); `$HERDR_ENV=1` with `$HERDR_PANE_ID` present selects herdr, composing the target as `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"`; absent both, the daemon falls back to tmux/`firstmate:0`, byte-identical to its pre-herdr-support behavior.
 Other runtime backends, including zellij, orca, and cmux, are not yet supported as supervisor backends - the daemon refuses loudly at startup (`FM_SUPERVISOR_SUPPORTED_BACKENDS="tmux herdr"`) rather than misapplying tmux primitives to a pane that isn't a tmux pane.
+Cursor is a narrower supervisor exception: even though cursor crewmates are now spawn-verified on herdr, `bin/fm-supervise-daemon.sh` still accepts cursor supervisors only on tmux until the herdr cursor-supervisor path is live-verified.
 
 **Injection dispatch.** `inject_msg`'s pane-exists probe, busy-guard (`pane_is_busy`), composer-guard (`pane_input_pending`), and verified submit all take an optional `<backend>` argument (defaulting to `tmux` when omitted, so every pre-existing caller/test is unaffected) and route through the generic dispatchers instead of calling `tmux` directly.
 For `backend=tmux` every dispatch resolves to the exact same underlying call as before (`fm_backend_capture`'s tmux arm runs the identical `tmux capture-pane -p -t <target> -S -40`; `fm_backend_tmux_send_text_submit` re-exports `fm_tmux_submit_core` verbatim), so tmux behavior is unchanged byte-for-byte.

@@ -609,15 +609,35 @@ fm_backend_herdr_capture() {  # <target> <lines>
 # a border-shaped line earlier in scrollback/a popup can never outrank the
 # real (bottom-anchored) composer row.
 #
+# The cursor harness (cursor-agent) draws a BORDERLESS "→ Add a follow-up" row
+# instead of a bordered box (verified cursor-agent 2026.07.01 on herdr - see
+# docs/herdr-backend.md "Cursor on herdr"). That row carries no border glyph,
+# so the bordered-row scan above never matched it and this function returned
+# unknown for every cursor pane - and fm-send treats unknown as delivered, so
+# a slash command's first (autocomplete-selecting) Enter looked submitted and
+# the second, actually-submitting Enter was never sent (the same failure class
+# as the 2026-07-03 grok incident). So the scan ALSO recognizes the cursor
+# arrow row structurally, by its leading "→" on an otherwise borderless line,
+# and classifies it with cursor's own rules (fm_backend_herdr_cursor_composer_classify).
+# A border row and an arrow row are told apart by the ORIGINAL trimmed line
+# shape, never by post-strip content, so a bordered grok composer whose text
+# happens to start with "→" is still read as a border row. Whichever composer
+# candidate appears LAST in the capture wins (the composer is bottom-anchored),
+# so a cursor pane is read by the cursor rules and a grok pane by the border
+# rules with no harness argument threaded through.
+#
 #   empty   - blank, a bare prompt glyph, or known ghost/placeholder text
 #             ("Type a message...", verified grok 0.2.82's empty-composer
-#             placeholder). Safe to treat as submitted.
+#             placeholder; "Add a follow-up" and the "… ctrl+c to stop" busy
+#             footer for cursor). Safe to treat as submitted.
 #   pending - real, unsubmitted text sits in the composer. This deliberately
 #             also covers a slash-command popup that just closed but only
 #             auto-completed or filled an argument-hint placeholder into the
 #             composer (e.g. "/compact" -> "/compact compaction
-#             instructions", verified live against real grok 0.2.82) - that
-#             first Enter is a SELECTION, not a submission.
+#             instructions", verified live against real grok 0.2.82; for
+#             cursor, "/no-mistakes" left on the arrow row after the popup's
+#             selecting Enter) - that first Enter is a SELECTION, not a
+#             submission.
 #   unknown - the pane could not be read, or no composer row was found in the
 #             captured window.
 FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
@@ -625,22 +645,54 @@ FM_BACKEND_HERDR_COMPOSER_LINES=${FM_BACKEND_HERDR_COMPOSER_LINES:-20}
 # herdr-verified harness needs its own idle placeholder recognized.
 FM_BACKEND_HERDR_IDLE_RE=${FM_BACKEND_HERDR_IDLE_RE:-'^Type a message\.\.\.$'}
 
+# fm_backend_herdr_cursor_composer_classify: classify a cursor borderless
+# composer arrow-row (the trimmed "→ …" line) as empty|pending, mirroring
+# tmux's fm_tmux_cursor_composer_state (bin/fm-tmux-lib.sh) in spirit. empty
+# when the row holds only the prompt arrow or one of cursor's idle
+# placeholders / busy footers (all mean no pending input / a landed submit);
+# pending for any other real, unsubmitted text (e.g. a slash command whose
+# first Enter only selected autocomplete).
+#
+# Two idle placeholders were live-verified on cursor-agent 2026.07.01 on herdr
+# (docs/herdr-backend.md "Cursor on herdr"): "Add a follow-up" (the
+# between-turns placeholder, matching what tmux saw) AND "Plan, search, build
+# anything" (the fresh-welcome-screen placeholder, before any input this
+# session). Both are empty-composer ghost text and must read empty, never
+# pending. While cursor is working it draws its interrupt hint on the same
+# arrow row ("Add a follow-up … ctrl+c to stop"), also empty - a landed submit,
+# not pending input.
+fm_backend_herdr_cursor_composer_classify() {  # <trimmed-arrow-row> -> empty|pending
+  local content=$1
+  content=${content#→}
+  content="${content#"${content%%[![:space:]]*}"}"
+  content="${content%"${content##*[![:space:]]}"}"
+  case "$content" in
+    ''|'Add a follow-up'|'Plan, search, build anything') printf 'empty'; return 0 ;;
+  esac
+  if printf '%s' "$content" | grep -qiE '^(Add a follow-up|Plan, search, build anything)[[:space:]]+ctrl\+c to stop$'; then
+    printf 'empty'; return 0
+  fi
+  printf 'pending'
+}
+
 fm_backend_herdr_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cap line trimmed stripped="" found=0
+  local target=$1 cap line trimmed stripped="" kind="" found=0
   cap=$(fm_backend_herdr_capture "$target" "$FM_BACKEND_HERDR_COMPOSER_LINES") || { printf 'unknown'; return 0; }
   while IFS= read -r line; do
     trimmed="${line#"${line%%[![:space:]]*}"}"
     trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
     [ -n "$trimmed" ] || continue
     case "$trimmed" in
-      '│'*'│'|'┃'*'┃'|'|'*'|') : ;;
-      *) continue ;;
+      '│'*'│'|'┃'*'┃'|'|'*'|') stripped=$trimmed; kind=border; found=1 ;;
+      '→ '*|'→') stripped=$trimmed; kind=cursor; found=1 ;;
     esac
-    stripped=$trimmed
-    found=1
   done < <(printf '%s\n' "$cap")
   [ "$found" -eq 1 ] || { printf 'unknown'; return 0; }
-  # Strip the border glyphs, then trim again.
+  if [ "$kind" = cursor ]; then
+    fm_backend_herdr_cursor_composer_classify "$stripped"
+    return 0
+  fi
+  # Border-row classification: strip the border glyphs, then trim again.
   stripped=${stripped//│/}
   stripped=${stripped//┃/}
   stripped=${stripped//|/}
