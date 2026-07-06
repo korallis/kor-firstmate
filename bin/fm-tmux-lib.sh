@@ -137,6 +137,28 @@ fm_tmux_target_harness() {
   printf '%s' "$harness"
 }
 
+fm_tmux_cursor_composer_state() {
+  local target=$1 tail line stripped composer content
+  tail=$(tmux capture-pane -p -t "$target" -S -12 2>/dev/null) || { printf 'unknown'; return 0; }
+  composer=
+  while IFS= read -r line || [ -n "$line" ]; do
+    stripped=$(fm_tmux_strip_composer_borders "$line")
+    case "$stripped" in
+      '→ '*) composer=$stripped ;;
+    esac
+  done <<EOF
+$tail
+EOF
+  [ -n "$composer" ] || { printf 'unknown'; return 0; }
+  content=${composer#'→ '}
+  content="${content#"${content%%[![:space:]]*}"}"
+  content="${content%"${content##*[![:space:]]}"}"
+  case "$content" in
+    ''|'Add a follow-up') printf 'empty'; return 0 ;;
+    *) printf 'pending'; return 0 ;;
+  esac
+}
+
 # fm_tmux_composer_state: classify the cursor/composer line of <target> as
 #   empty   - no pending input (blank, a bare prompt, a busy footer, or only dim
 #             ghost/placeholder text). Safe to inject; also the positive
@@ -155,7 +177,7 @@ fm_tmux_target_harness() {
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   local target=$1 cy raw line stripped target_harness
   target_harness=$(fm_tmux_target_harness "$target" || true)
-  [ "$target_harness" = cursor ] && { printf 'unknown'; return 0; }
+  [ "$target_harness" = cursor ] && { fm_tmux_cursor_composer_state "$target"; return 0; }
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }

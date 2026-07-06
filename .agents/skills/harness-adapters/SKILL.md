@@ -235,10 +235,11 @@ When firstmate merged into a pre-existing local hook file, `fm-teardown` uses `j
 Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
-So `fm_tmux_composer_state` resolves the target's recorded harness from `state/<id>.meta` for `fm-<id>` windows and returns `unknown` for cursor panes instead of pretending the `#{cursor_y}` row proves empty or pending.
-That is lenient for `fm-send` submit verification, avoids false empty success on off-row composer text, and avoids wedging on the non-empty footer/path row.
+So `fm_tmux_composer_state` resolves the target's recorded harness from `state/<id>.meta` for `fm-<id>` windows and, for cursor panes only, scans a bounded plain pane tail for the last stripped line beginning with the literal `→ ` prompt.
+It returns `empty` when that row is blank after the prompt or exactly `Add a follow-up`, `pending` when any other text remains there, and `unknown` if no cursor composer row is visible.
+That restores Enter retry for slash autocomplete while avoiding false positives from non-cursor arrow-prefixed output and avoiding the off-row `#{cursor_y}` footer.
 There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
 
 **Backend note.** Verified on the tmux reference backend.
 Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook.
-cursor's composer is borderless, so tmux, herdr, and Orca composer detectors return `unknown` (handled leniently by `fm-send`).
+cursor's composer is borderless, so tmux uses the harness-scoped `→ ` row detector while herdr and Orca composer detectors return `unknown` (handled leniently by `fm-send`).

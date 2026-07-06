@@ -368,7 +368,7 @@ test_cursor_busy_regex_requires_footer_pairing() {
   pass "cursor busy detection requires the follow-up footer and interrupt hint"
 }
 
-test_cursor_meta_target_composer_state_is_unknown() {
+test_cursor_meta_target_composer_state_reads_arrow_row() {
   local dir fb tail cursor state id
   dir="$TMP_ROOT/cursor-composer"; mkdir -p "$dir"
   mkdir -p "$dir/state"
@@ -383,8 +383,20 @@ test_cursor_meta_target_composer_state_is_unknown() {
   state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
     FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
     fm_tmux_composer_state "fakepane")
-  [ "$state" = unknown ] || fail "cursor composer state read as $state, expected unknown"
-  pass "cursor composer state returns unknown for metadata-confirmed cursor panes"
+  [ "$state" = pending ] || fail "cursor composer text read as $state, expected pending"
+
+  printf 'output\n→ Add a follow-up\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = empty ] || fail "cursor placeholder row read as $state, expected empty"
+
+  printf 'output\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = unknown ] || fail "cursor pane without composer row read as $state, expected unknown"
+  pass "cursor composer state reads the metadata-confirmed arrow row"
 }
 
 test_non_cursor_composer_ignores_arrow_tail_output() {
@@ -466,7 +478,7 @@ test_cursor_skips_tracked_project_hooks
 test_cursor_teardown_is_clean
 test_cursor_teardown_preserves_existing_local_hooks
 test_cursor_busy_regex_requires_footer_pairing
-test_cursor_meta_target_composer_state_is_unknown
+test_cursor_meta_target_composer_state_reads_arrow_row
 test_non_cursor_composer_ignores_arrow_tail_output
 test_fm_harness_detects_cursor_env_marker
 test_fm_harness_detects_cursor_ancestry
