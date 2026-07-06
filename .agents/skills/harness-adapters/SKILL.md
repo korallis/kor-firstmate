@@ -227,11 +227,13 @@ Turn-end hook: cursor fires a project-level `stop` hook when the agent loop ends
 cursor LAYERS project hooks on top of the user-level `~/.cursor/hooks.json` (Cursor docs: "project layered with user"), so `fm-spawn` writes a per-worktree `<worktree>/.cursor/hooks.json` whose `stop` command touches this task's `state/<id>.turn-ended`, WITHOUT displacing any global integration hook (e.g. herdr's `sessionStart` agent-session reporting, or Orca's hooks).
 The stop command prints nothing, so cursor's optional stop-hook followup (triggered only by a `{"followup_message":...}` on stdout) never fires.
 The file is kept out of git via `info/exclude` like the other harnesses' worktree hooks.
+If `.cursor` is a symlink or non-directory, or `.cursor/hooks.json` would resolve outside the worktree, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
 If `.cursor/hooks.json` is already tracked by the project, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
 If an existing untracked `.cursor/hooks.json` is valid JSON and `jq` is available, `fm-spawn` merges its current stop command while replacing any prior firstmate stop command that touched a `*.turn-ended` path.
 If an existing file is unparseable or `jq` is missing, `fm-spawn` leaves it untouched and warns instead of overwriting it.
 When firstmate created `.cursor/hooks.json` fresh during spawn, `fm-teardown` removes the file directly without requiring `jq`.
 When firstmate merged into a pre-existing local hook file, `fm-teardown` uses `jq` to remove only the stop command for that task's `*.turn-ended` file and preserves the rest of the file.
+Teardown applies the same in-worktree containment check before removing or editing `.cursor/hooks.json`, so a project-controlled symlink cannot make it delete an external hook file.
 Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.

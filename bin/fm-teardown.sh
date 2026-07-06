@@ -105,8 +105,8 @@ meta_value() {
 
 remove_cursor_hook() {
   local wt=$1 id=$2 meta=${3:-} hooks created tmp needle
-  [ -n "$wt" ] && [ -e "$wt/.cursor/hooks.json" ] || return 0
-  hooks="$wt/.cursor/hooks.json"
+  hooks=$(cursor_hooks_path_for_cleanup "$wt" || true)
+  [ -n "$hooks" ] || return 0
   git -C "$wt" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1 && return 0
   created=$([ -n "$meta" ] && [ -f "$meta" ] && meta_value "$meta" cursor_hook_created || true)
   if [ "$created" = 1 ]; then
@@ -138,6 +138,47 @@ remove_cursor_hook() {
     rm -f "$tmp"
     echo "warning: cursor hook cleanup skipped for $wt: could not update .cursor/hooks.json" >&2
   fi
+}
+
+cursor_hooks_path_for_cleanup() {
+  local wt=$1 dir hooks wt_real dir_real hook_real
+  [ -n "$wt" ] || return 1
+  dir="$wt/.cursor"
+  [ -e "$dir" ] || return 1
+  if [ -L "$dir" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor is a symlink" >&2
+    return 1
+  fi
+  if [ ! -d "$dir" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor is not a directory" >&2
+    return 1
+  fi
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  dir_real=$(cd "$dir" 2>/dev/null && pwd -P) || {
+    echo "warning: cursor hook cleanup skipped for $wt: could not canonicalize .cursor directory" >&2
+    return 1
+  }
+  case "$dir_real" in
+    "$wt_real"/*) ;;
+    *)
+      echo "warning: cursor hook cleanup skipped for $wt: .cursor resolves outside the worktree" >&2
+      return 1
+      ;;
+  esac
+  hooks="$dir/hooks.json"
+  [ -e "$hooks" ] || return 1
+  if [ -L "$hooks" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor/hooks.json is a symlink" >&2
+    return 1
+  fi
+  hook_real="$dir_real/hooks.json"
+  case "$hook_real" in
+    "$wt_real"/*) printf '%s\n' "$hooks" ;;
+    *)
+      echo "warning: cursor hook cleanup skipped for $wt: .cursor/hooks.json resolves outside the worktree" >&2
+      return 1
+      ;;
+  esac
 }
 
 require_orca_worktree_id() {

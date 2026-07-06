@@ -162,7 +162,6 @@ else
   BACKEND=$(fm_backend_name)
 fi
 fm_backend_validate_spawn "$BACKEND" || exit 1
-fm_backend_source "$BACKEND" || exit 1
 if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
   exit 1
@@ -170,9 +169,6 @@ fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=cmux does not support --secondmate spawns yet" >&2
   exit 1
-fi
-if [ "$BACKEND" = orca ]; then
-  fm_backend_orca_runtime_check || exit 1
 fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
@@ -385,6 +381,11 @@ esac
 if [ "$HARNESS" = cursor ] && [ "$BACKEND" != tmux ]; then
   echo "error: cursor harness is only verified on the tmux backend; herdr/zellij/orca/cmux support is not yet verified. Re-run on tmux or pick a verified harness." >&2
   exit 1
+fi
+
+fm_backend_source "$BACKEND" || exit 1
+if [ "$BACKEND" = orca ]; then
+  fm_backend_orca_runtime_check || exit 1
 fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
@@ -874,6 +875,47 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+cursor_hooks_path() {
+  local wt=$1 dir hooks wt_real dir_real hook_real
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  dir="$wt/.cursor"
+  if [ -L "$dir" ]; then
+    echo "warning: cursor stop hook not installed: .cursor is a symlink; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+    echo "warning: cursor stop hook not installed: .cursor is not a directory; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  mkdir -p "$dir" || {
+    echo "warning: cursor stop hook not installed: could not create .cursor directory" >&2
+    return 1
+  }
+  dir_real=$(cd "$dir" 2>/dev/null && pwd -P) || {
+    echo "warning: cursor stop hook not installed: could not canonicalize .cursor directory" >&2
+    return 1
+  }
+  case "$dir_real" in
+    "$wt_real"/*) ;;
+    *)
+      echo "warning: cursor stop hook not installed: .cursor resolves outside the worktree; turn-end will rely on stale-pane detection" >&2
+      return 1
+      ;;
+  esac
+  hooks="$dir/hooks.json"
+  if [ -L "$hooks" ]; then
+    echo "warning: cursor stop hook not installed: .cursor/hooks.json is a symlink; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  hook_real="$dir_real/hooks.json"
+  case "$hook_real" in
+    "$wt_real"/*) printf '%s\n' "$hooks" ;;
+    *)
+      echo "warning: cursor stop hook not installed: .cursor/hooks.json resolves outside the worktree; turn-end will rely on stale-pane detection" >&2
+      return 1
+      ;;
+  esac
+}
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
@@ -975,11 +1017,12 @@ EOF
       # worktree hooks. If the worktree already ships its own .cursor/hooks.json,
       # merge firstmate's stop command into it (jq) instead of clobbering the
       # project's hooks when the file is untracked and parseable.
-      mkdir -p "$WT/.cursor"
-      cursor_hooks="$WT/.cursor/hooks.json"
+      cursor_hooks=$(cursor_hooks_path "$WT" || true)
       cursor_cmd="touch $(shell_quote "$TURNEND")"
       cursor_wrote=0
-      if git -C "$WT" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1; then
+      if [ -z "$cursor_hooks" ]; then
+        :
+      elif git -C "$WT" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1; then
         echo "warning: cursor stop hook not installed: .cursor/hooks.json is tracked by the project" >&2
       elif [ -f "$cursor_hooks" ]; then
         if ! command -v jq >/dev/null 2>&1; then

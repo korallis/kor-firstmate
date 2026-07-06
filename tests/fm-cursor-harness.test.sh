@@ -217,6 +217,20 @@ test_cursor_refuses_non_tmux_backends() {
   assert_absent "$HOME_DIR/state/$ID.meta" "cursor zellij refusal wrote meta"
   launch=$(cat "$LAUNCH_LOG")
   [ -z "$launch" ] || fail "cursor zellij refusal sent a launch command"
+
+  rec=$(make_spawn_case backend-orca)
+  read_case_record "$rec"
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
+    cursor --backend orca)
+  status=$?
+  expect_code 1 "$status" "cursor spawn on orca should be refused before orca preflight"
+  assert_contains "$out" "error: cursor harness is only verified on the tmux backend" \
+    "cursor orca refusal did not use the tmux-only gate"
+  assert_not_contains "$out" "backend=orca selected but the 'orca' CLI is not installed" \
+    "cursor orca refusal ran orca preflight before the tmux-only gate"
+  assert_absent "$HOME_DIR/state/$ID.meta" "cursor orca refusal wrote meta"
+  launch=$(cat "$LAUNCH_LOG")
+  [ -z "$launch" ] || fail "cursor orca refusal sent a launch command"
   pass "cursor refuses non-tmux backend spawns before side effects"
 }
 
@@ -338,6 +352,35 @@ test_cursor_skips_tracked_project_hooks() {
   git -C "$WT_DIR" status --porcelain > "$CASE_DIR/status.txt"
   [ ! -s "$CASE_DIR/status.txt" ] || fail "tracked cursor project hook was dirtied"
   pass "cursor skips tracked project hooks instead of mutating them"
+}
+
+test_cursor_skips_symlinked_cursor_dir() {
+  local rec out status external hooks
+  rec=$(make_spawn_case hook-symlink)
+  read_case_record "$rec"
+
+  external="$CASE_DIR/external-cursor"
+  mkdir -p "$external"
+  printf '{"version":1,"hooks":{"afterFileEdit":[{"command":"external-format"}]}}\n' \
+    > "$external/hooks.json"
+  ln -s "$external" "$WT_DIR/.cursor"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" cursor)
+  status=$?
+  expect_code 0 "$status" "cursor spawn should still succeed when .cursor is a symlink"
+  assert_contains "$out" "warning: cursor stop hook not installed: .cursor is a symlink" \
+    "cursor spawn should warn when refusing a symlinked .cursor directory"
+  hooks="$external/hooks.json"
+  assert_grep 'external-format' "$hooks" "external cursor hook was not preserved after spawn"
+  assert_no_grep 'turn-ended' "$hooks" "cursor spawn wrote firstmate state through a .cursor symlink"
+
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    PATH="$FAKEBIN_DIR:$PATH" "$TEARDOWN" "$ID" --force >/dev/null 2>&1 \
+    || fail "cursor teardown failed for symlinked .cursor case"
+
+  assert_present "$hooks" "cursor teardown deleted an external hooks.json through a .cursor symlink"
+  assert_grep 'external-format' "$hooks" "external cursor hook changed after teardown"
+  pass "cursor leaves symlinked .cursor directories untouched"
 }
 
 test_cursor_teardown_is_clean() {
@@ -529,6 +572,7 @@ test_cursor_installs_project_stop_hook
 test_cursor_merges_existing_project_hooks
 test_cursor_replaces_prior_firstmate_stop_hook
 test_cursor_skips_tracked_project_hooks
+test_cursor_skips_symlinked_cursor_dir
 test_cursor_teardown_is_clean
 test_cursor_teardown_preserves_existing_local_hooks
 test_cursor_busy_regex_requires_footer_pairing
