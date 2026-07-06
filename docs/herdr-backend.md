@@ -256,6 +256,38 @@ A dedicated composer-state or cursor-row read primitive is still a candidate ups
 
 All implemented backends expose the identical caller-facing verdict vocabulary (`empty`, `pending`, `unknown`, `send-failed`), so `fm-send.sh` needs no backend-specific branching at all.
 
+## Cursor on herdr (verified 2026-07-06)
+
+The cursor harness (`cursor-agent`) is verified on herdr, in addition to its original tmux verification.
+`fm-spawn.sh` therefore allows `--harness cursor` on the herdr backend while still refusing it on zellij/orca/cmux, whose cursor submit verification is not yet implemented.
+
+The gap that had to close first: cursor's interactive composer draws a BORDERLESS `→ Add a follow-up` row, not a bordered box.
+The structural border-row reader above never matched it, so `fm_backend_herdr_composer_state` returned `unknown` for every cursor pane, and `fm-send` treats `unknown` as delivered.
+A slash command (for example `/no-mistakes`) could then stop after the first Enter that only selected autocomplete, never issuing the second, actually-submitting Enter - the same failure class as the 2026-07-03 grok incident above, on cursor's borderless row.
+
+The fix keeps the same structural-classification approach.
+`fm_backend_herdr_composer_state` now also recognizes the cursor arrow row by its leading `→` on an otherwise borderless line, and classifies it with cursor's own rules (`fm_backend_herdr_cursor_composer_classify`, mirroring tmux's `fm_tmux_cursor_composer_state`).
+A border row and an arrow row are told apart by the ORIGINAL trimmed line shape, never by post-strip content, so a bordered grok composer whose text happens to start with `→` is still read as a border row.
+Whichever composer candidate appears last in the capture wins (the composer is bottom-anchored), so a cursor pane reads by the cursor rules and a grok pane by the border rules with no harness argument threaded through - the reader stays a pure `<target>` function used unchanged by both the send path and the away-mode daemon.
+
+The arrow row reads `empty` when it holds only the prompt arrow, one of cursor's idle placeholders, or its busy footer, and `pending` for any other real, unsubmitted text.
+
+**Live verification (real herdr, isolated throwaway session).**
+Versions: herdr 0.7.1, client protocol 14; cursor-agent 2026.07.01-41b2de7; macOS aarch64; 2026-07-06.
+A real `cursor-agent --force` pane was launched in a throwaway `HERDR_SESSION`, its Workspace Trust dialog accepted with `a`, and the composer read at each state with `fm_backend_herdr_composer_state`:
+
+- Fresh welcome screen: the composer row is `→ Plan, search, build anything` - read `empty` (idle placeholder).
+- After typing `/no-mistakes` unsubmitted: the row is `→ /no-mistakes` - read `pending`, so the retry loop keeps sending Enter.
+- After the submit landed: cursor drew `→ Add a follow-up   ctrl+c to stop` on the same row - read `empty` (busy footer, a landed submit).
+
+Then `fm_backend_herdr_send_text_submit "$TARGET" "/no-mistakes" ...` (the exact path `fm-send` drives) returned `empty` and the pane went to a working state (`fm_backend_herdr_busy_state` = `busy`, footer `Running`).
+The pane then showed cursor genuinely invoking the skill (`I'll run the no-mistakes validation gate ...`, `$ no-mistakes axi exit 1`, `/no-mistakes bare mode validates`), which errored only because the throwaway repo was not no-mistakes-initialized - proving the slash command was actually SUBMITTED and executed, not merely autocompleted.
+
+**Idle-placeholder note.**
+Cursor shows two empty-composer placeholders live on herdr: `Add a follow-up` (between turns, matching what tmux saw) and `Plan, search, build anything` (the fresh welcome screen, before any input this session).
+`fm_backend_herdr_cursor_composer_classify` treats both as `empty`, and its busy-footer match covers the `... ctrl+c to stop` interrupt-hint form.
+Coverage lives in `tests/fm-backend-herdr.test.sh`'s cursor composer-row section.
+
 ## Session targeting: the `--session` flag, not `HERDR_SESSION` alone
 
 `HERDR_SESSION=<name>` is the adapter's normal way to select a named herdr session for NON-destructive operations: start, workspace, tab, pane, capture, send, and busy-state calls all still use it (via `fm_backend_herdr_cli`, below).

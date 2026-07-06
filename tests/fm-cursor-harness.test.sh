@@ -50,6 +50,20 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # A fake `herdr` that reports an OLD protocol, so a cursor-on-herdr spawn
+  # cleanly passes the cursor-backend gate (now allowing herdr) and then fails
+  # at herdr's OWN version preflight - a herdr-specific error, never the cursor
+  # tmux/herdr-only gate. This keeps the herdr sub-case hermetic: it never
+  # touches the real installed herdr or its live default session.
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *status*--json*) printf '{"client":{"protocol":5,"version":"0.0.1"},"server":{"running":false}}\n'; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/herdr"
   fm_fake_exit0 "$fakebin" treehouse gh-axi gh
   printf '%s\n' "$fakebin"
 }
@@ -191,20 +205,24 @@ test_cursor_no_model_omits_flag() {
   pass "cursor omits --model when no model is requested (uses cursor's own default)"
 }
 
-test_cursor_refuses_non_tmux_backends() {
+test_cursor_refuses_unverified_backends() {
   local rec out status launch
+
+  # herdr is now a VERIFIED cursor backend, so it must PASS the cursor gate.
+  # With the fake herdr reporting an old protocol, the spawn passes the cursor
+  # gate and stops at herdr's OWN version preflight - proving the gate no
+  # longer blocks herdr while never touching the real installed herdr.
   rec=$(make_spawn_case backend-herdr)
   read_case_record "$rec"
-
   out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" \
     cursor --backend herdr)
   status=$?
-  expect_code 1 "$status" "cursor spawn on herdr should be refused"
-  assert_contains "$out" "error: cursor harness is only verified on the tmux backend" \
-    "cursor herdr refusal did not explain the tmux-only gate"
-  assert_absent "$HOME_DIR/state/$ID.meta" "cursor herdr refusal wrote meta"
-  launch=$(cat "$LAUNCH_LOG")
-  [ -z "$launch" ] || fail "cursor herdr refusal sent a launch command"
+  expect_code 1 "$status" "cursor spawn on herdr should stop at herdr's own version preflight"
+  assert_not_contains "$out" "cursor harness is only verified" \
+    "cursor herdr spawn must not hit the cursor-backend gate (herdr is verified)"
+  assert_contains "$out" "older than the verified minimum" \
+    "cursor herdr spawn did not reach herdr's own version preflight past the cursor gate"
+  assert_absent "$HOME_DIR/state/$ID.meta" "cursor herdr version-gate failure wrote meta"
 
   rec=$(make_spawn_case backend-zellij)
   read_case_record "$rec"
@@ -212,8 +230,8 @@ test_cursor_refuses_non_tmux_backends() {
     cursor --backend zellij)
   status=$?
   expect_code 1 "$status" "cursor spawn on zellij should be refused"
-  assert_contains "$out" "herdr/zellij/orca/cmux support is not yet verified" \
-    "cursor zellij refusal did not name unverified non-tmux backends"
+  assert_contains "$out" "zellij/orca/cmux support is not yet verified" \
+    "cursor zellij refusal did not name the still-unverified backends"
   assert_absent "$HOME_DIR/state/$ID.meta" "cursor zellij refusal wrote meta"
   launch=$(cat "$LAUNCH_LOG")
   [ -z "$launch" ] || fail "cursor zellij refusal sent a launch command"
@@ -224,14 +242,14 @@ test_cursor_refuses_non_tmux_backends() {
     cursor --backend orca)
   status=$?
   expect_code 1 "$status" "cursor spawn on orca should be refused before orca preflight"
-  assert_contains "$out" "error: cursor harness is only verified on the tmux backend" \
-    "cursor orca refusal did not use the tmux-only gate"
+  assert_contains "$out" "error: cursor harness is only verified on the tmux and herdr backends" \
+    "cursor orca refusal did not use the tmux/herdr-only gate"
   assert_not_contains "$out" "backend=orca selected but the 'orca' CLI is not installed" \
-    "cursor orca refusal ran orca preflight before the tmux-only gate"
+    "cursor orca refusal ran orca preflight before the cursor-backend gate"
   assert_absent "$HOME_DIR/state/$ID.meta" "cursor orca refusal wrote meta"
   launch=$(cat "$LAUNCH_LOG")
   [ -z "$launch" ] || fail "cursor orca refusal sent a launch command"
-  pass "cursor refuses non-tmux backend spawns before side effects"
+  pass "cursor allows herdr but refuses still-unverified backends before side effects"
 }
 
 test_cursor_explicit_tmux_backend_still_spawns() {
@@ -605,7 +623,7 @@ test_cursor_launch_template_folds_model_and_effort
 test_cursor_base_slug_without_effort
 test_cursor_non_claude_model_omits_effort_suffix
 test_cursor_no_model_omits_flag
-test_cursor_refuses_non_tmux_backends
+test_cursor_refuses_unverified_backends
 test_cursor_explicit_tmux_backend_still_spawns
 test_cursor_installs_project_stop_hook
 test_cursor_merges_existing_project_hooks
