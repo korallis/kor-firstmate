@@ -120,6 +120,7 @@ When `config/crew-dispatch.json` exists, crewmate and scout spawns require an ex
 The primary propagates `config/crew-dispatch.json`, `config/crew-harness`, and `config/backlog-backend` into secondmate homes at secondmate spawn, during the locked session-start bootstrap secondmate sweep, and during explicit `bin/fm-config-push.sh` runs, so a secondmate's own crewmates, dispatch profiles, and backlog backend use the primary values.
 `config/secondmate-harness` is not inherited because secondmates do not launch secondmates.
 For grok, `fm-spawn.sh` installs one firstmate-owned global turn-end hook under `$GROK_HOME/hooks/`, or `~/.grok/hooks/` when `GROK_HOME` is unset, and drops a per-task `.fm-grok-turnend` pointer in the worktree, with teardown removing the task token and pointer.
+For cursor, `fm-spawn.sh` installs a git-excluded per-worktree `.cursor/hooks.json` stop hook only on the tmux backend, records `cursor_hook_created=1` when firstmate created that hook file from scratch, and `fm-teardown.sh` removes only firstmate's hook entry.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
@@ -268,6 +269,7 @@ FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected
+FM_SUPERVISOR_HARNESS=             # optional supervisor pane harness override; cursor on tmux uses this to read the arrow-row composer instead of tmux cursor_y
 FM_INJECT_SKIP=heartbeat           # |-prefixes force-self-handled bypassing classification; empty disables
 FM_ESCALATE_BATCH_SECS=90          # buffer window for batched escalation digests; 0 = flush immediately
 FM_MAX_DEFER_SECS=300              # max buffered escalation age before retry plus wedge alarm; 0 disables

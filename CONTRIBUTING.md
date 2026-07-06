@@ -45,7 +45,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
   Each starts with a usage header comment; keep it accurate when you change behavior.
   Test scripts and helpers in `tests/` are plain bash too.
   `shellcheck bin/*.sh bin/backends/*.sh tests/*.sh` must pass, and CI enforces it.
-- Changes to harness adapters (detection in `bin/fm-harness.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, busy signatures in `bin/fm-watch.sh` and `bin/fm-tmux-lib.sh`, cleanup in `bin/fm-teardown.sh`, and facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
+- Changes to harness adapters (detection in `bin/fm-harness.sh`, session-lock recognition in `bin/fm-lock.sh`, dispatch-profile validation in `bin/fm-bootstrap.sh`, launch and hook mechanics in `bin/fm-spawn.sh`, busy/composer handling in `bin/fm-watch.sh` and `bin/fm-tmux-lib.sh`, away-mode supervisor handling in `bin/fm-supervise-daemon.sh` when the primary pane needs harness-specific composer checks, cleanup in `bin/fm-teardown.sh`, and facts in `.agents/skills/harness-adapters/SKILL.md`) must be verified empirically against the real harness, never written from documentation alone.
 - Changes to runtime session backends (`bin/fm-backend.sh`, `bin/backends/`, and the scripts that dispatch through them) need empirical adapter notes in the relevant backend guide: `docs/tmux-backend.md`, `docs/herdr-backend.md`, `docs/zellij-backend.md`, `docs/orca-backend.md`, or `docs/cmux-backend.md`.
 - In Markdown, put each full sentence on its own line.
 - `README.md` stays a concise overview plus pointers: it never carries a wall of inline detail.
@@ -74,17 +74,18 @@ tests/fm-wake-queue.test.sh               # durable wake queue losslessness, cat
 tests/fm-watcher-lock.test.sh             # watcher singleton, lock-race, watch-arm liveness, and guard-warning tests
 tests/fm-turnend-guard.test.sh            # shared supervision predicate plus Claude Stop-hook scoping, loop guard, fail-open, and live watcher health tests
 tests/fm-watch-triage.test.sh             # always-on watcher triage: benign absorb, actionable surface, stale status-log override, wedge threshold, heartbeat backstop, and afk one-shot coherence
-tests/fm-daemon.test.sh                   # sub-supervisor classifier, /afk presence-gating, max-defer, composer, and fm-send submit tests
+tests/fm-daemon.test.sh                   # sub-supervisor classifier, /afk presence-gating, max-defer, composer, cursor supervisor-harness override, and fm-send submit tests
 tests/fm-send-settle.test.sh              # fm-send post-submit settle pause, tuning, disable, and --key bypass tests
 tests/fm-send-popup-settle.test.sh        # fm-send pre-Enter popup-settle selection for slash commands and codex $skill invocations
 tests/fm-send-secondmate-marker.test.sh   # fm-send from-firstmate marker for kind=secondmate targets: marked vs crewmate/explicit/--key, and the exact marker byte sequence
 tests/fm-wake-daemon-lifecycle-e2e.test.sh # watcher + daemon lifecycle e2e: restart catch-up, batching, dedupe, stale-pane routing, and digest injection
-tests/fm-composer-ghost.test.sh           # dim-ghost stripping, ghost-only composer detection, and escape-free peek tests
+tests/fm-composer-ghost.test.sh           # dim-ghost stripping, ghost-only composer detection, optional idle regex coverage, cursor placeholder guards, and escape-free peek tests
 tests/fm-afk-inject-e2e.test.sh           # private-socket end-to-end test of the afk injection path (partial-input deferral, swallowed-Enter retry)
 tests/fm-afk-inject-herdr-e2e.test.sh     # real-herdr end-to-end test of the afk daemon's herdr transport, on an isolated throwaway HERDR_SESSION: partial-input deferral, swallowed-Enter retry, a normal digest, and the max-defer wedge alarm on a persistently pending composer
 tests/fm-bootstrap.test.sh                # bootstrap dependency, feature-probe, and crew-dispatch reporting tests
 tests/fm-session-start.test.sh            # fm-session-start.sh: ABSENT vs empty-vs-present digest files, lock-refusal read-only path skipping every mutating step, diagnostics-first section ordering, status-tail bounding, tmux/herdr endpoint liveness, and composition of the real fm-lock/fm-bootstrap/fm-wake-drain scripts
 tests/fm-grok-harness.test.sh             # grok adapter spawn hook, token guard, teardown cleanup, and session-lock detection tests
+tests/fm-cursor-harness.test.sh           # cursor adapter launch profile, tmux-only gate, stop hook install/merge/cleanup, composer classifier, busy regex, and harness/lock detection tests
 tests/fm-fleet-sync.test.sh               # project clone refresh: safe detached recovery, STUCK drift reports, benign skips, and bootstrap relay
 tests/fm-x-mode.test.sh                   # X-mode poll, inbox context round-trip, reply threading, dismiss, completion follow-up counters/caps, dry-run preview, and .env-presence activation tests
 tests/fm-tangle-guard.test.sh             # primary-checkout tangle detection, read-only remediation suppression, and spawn/brief isolation tests

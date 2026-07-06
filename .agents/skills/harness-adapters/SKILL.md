@@ -30,7 +30,7 @@ The supervision knowledge lives here: busy signature, exit command, interrupt, d
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain and fall back to firstmate's own harness until that adapter is verified.
-If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override, and the verified knowledge here.
+If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record detection in `fm-harness.sh`, any primary-session recognition in `fm-lock.sh`, dispatch validation in `fm-bootstrap.sh`, launch and hook mechanics in `fm-spawn.sh`, the busy signature and composer behavior in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed away-mode supervisor handling in `fm-supervise-daemon.sh`, cleanup in `fm-teardown.sh`, and the verified knowledge here.
 
 ## Detection
 
