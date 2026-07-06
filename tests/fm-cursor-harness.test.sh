@@ -494,6 +494,45 @@ test_cursor_meta_target_composer_state_reads_arrow_row() {
   pass "cursor composer state reads the metadata-confirmed arrow row"
 }
 
+test_cursor_supervisor_harness_override_reads_arrow_row() {
+  local dir fb tail cursor state
+  dir="$TMP_ROOT/cursor-supervisor-composer"; mkdir -p "$dir"
+  fb=$(make_cursor_state_fakebin "$dir")
+  tail="$dir/tail.txt"
+  cursor="$dir/cursor-line.txt"
+  printf '/Users/example/project\n' > "$cursor"
+
+  printf 'output\n→ /no-mistakes\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_FAKE_WINDOW_NAME="firstmate" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane" cursor)
+  [ "$state" = pending ] || fail "cursor supervisor typed row read as $state, expected pending"
+
+  printf 'output\n→ Add a follow-up\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_FAKE_WINDOW_NAME="firstmate" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane" cursor)
+  [ "$state" = empty ] || fail "cursor supervisor placeholder row read as $state, expected empty"
+
+  if PATH="$fb:$PATH" FM_FAKE_WINDOW_NAME="firstmate" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_pane_input_pending "fakepane" cursor; then
+    fail "cursor supervisor placeholder was detected as pending with harness override"
+  fi
+
+  printf 'output\n→ /no-mistakes\n/Users/example/project\n' > "$tail"
+  PATH="$fb:$PATH" FM_FAKE_WINDOW_NAME="firstmate" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_pane_input_pending "fakepane" cursor \
+    || fail "cursor supervisor typed row was not pending through fm_pane_input_pending"
+
+  state=$(PATH="$fb:$PATH" FM_FAKE_WINDOW_NAME="firstmate" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = pending ] || fail "no-override supervisor path should fall back to cursor_y behavior"
+  pass "cursor supervisor harness override reads the arrow composer row"
+}
+
 test_non_cursor_composer_ignores_arrow_tail_output() {
   local dir fb tail cursor state id
   dir="$TMP_ROOT/noncursor-arrow-tail"; mkdir -p "$dir"
@@ -577,6 +616,7 @@ test_cursor_teardown_is_clean
 test_cursor_teardown_preserves_existing_local_hooks
 test_cursor_busy_regex_requires_footer_pairing
 test_cursor_meta_target_composer_state_reads_arrow_row
+test_cursor_supervisor_harness_override_reads_arrow_row
 test_non_cursor_composer_ignores_arrow_tail_output
 test_fm_harness_detects_cursor_env_marker
 test_fm_harness_detects_cursor_ancestry

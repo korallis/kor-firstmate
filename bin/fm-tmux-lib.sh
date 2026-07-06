@@ -177,9 +177,13 @@ EOF
 # borders ("│ … │", heavy "┃", or a plain ASCII "|") using literal-string
 # substitution (bash 3.2 safe, locale-independent — no \u escapes, no multibyte
 # character classes), and asks whether anything real is left.
-fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw line stripped target_harness
-  target_harness=$(fm_tmux_target_harness "$target" || true)
+fm_tmux_composer_state() {  # <target> [harness-override] -> empty|pending|unknown
+  local target=$1 harness_override=${2:-} cy raw line stripped target_harness
+  if [ -n "$harness_override" ]; then
+    target_harness=$harness_override
+  else
+    target_harness=$(fm_tmux_target_harness "$target" || true)
+  fi
   [ "$target_harness" = cursor ] && { fm_tmux_cursor_composer_state "$target"; return 0; }
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
@@ -208,8 +212,12 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
 # fm_pane_input_pending: 0 (pending) if the cursor line holds real unsubmitted
 # text, 1 otherwise. An unreadable pane is treated as NOT pending (fail-safe:
 # the same bias the old daemon used — an unknown pane defers nothing here).
-fm_pane_input_pending() {  # <target>
-  [ "$(fm_tmux_composer_state "$1")" = pending ]
+fm_pane_input_pending() {  # <target> [harness-override]
+  if [ -n "${2:-}" ]; then
+    [ "$(fm_tmux_composer_state "$1" "$2")" = pending ]
+  else
+    [ "$(fm_tmux_composer_state "$1")" = pending ]
+  fi
 }
 
 # fm_pane_is_busy: 0 if the pane's last few non-blank lines show a busy footer
@@ -230,21 +238,29 @@ fm_pane_is_busy() {  # <target>
 #     not be mistaken for a delivered escalation).
 #   - fm-send fails only on "pending" (lenient: a positively-confirmed swallow),
 #     so an unreadable pane never turns a normal steer into a false error.
-fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
-  local target=$1 retries=$2 sleep_s=$3 i=0 state
+fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [harness-override]
+  local target=$1 retries=$2 sleep_s=$3 harness_override=${4:-} i=0 state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
-    state=$(fm_tmux_composer_state "$target")
+    if [ -n "$harness_override" ]; then
+      state=$(fm_tmux_composer_state "$target" "$harness_override")
+    else
+      state=$(fm_tmux_composer_state "$target")
+    fi
     [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
 }
 
-fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
+fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [harness-override]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 harness_override=${6:-}
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+  if [ -n "$harness_override" ]; then
+    fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$harness_override"
+  else
+    fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+  fi
 }
