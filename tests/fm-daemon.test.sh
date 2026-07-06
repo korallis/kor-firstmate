@@ -833,6 +833,24 @@ test_discover_supervisor_harness_precedence() {
   pass "discover_supervisor_harness: override > fm-harness detection"
 }
 
+test_cursor_supervisor_refuses_non_tmux_backend() {
+  local dir state out status
+  dir=$(make_supercase cursor-supervisor-herdr)
+  state="$dir/state"
+
+  out=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir/home" FM_SUPERVISOR_BACKEND=herdr \
+    FM_SUPERVISOR_HARNESS=cursor FM_SUPERVISOR_TARGET="default:w1:p2" \
+    TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' "$DAEMON" 2>&1)
+  status=$?
+  expect_code 1 "$status" "cursor supervisor on herdr should be refused"
+  assert_contains "$out" "error: cursor supervisor is only verified on the tmux backend" \
+    "cursor supervisor refusal did not explain the tmux-only gate"
+  assert_contains "$out" "herdr cursor support is a separate verified follow-up" \
+    "cursor supervisor refusal did not identify herdr as a follow-up"
+  assert_absent "$state/.supervise-daemon.pid" "cursor supervisor refusal left a pidfile"
+  pass "cursor supervisor refuses non-tmux backends at startup"
+}
+
 test_discover_supervisor_target_herdr() {
   local out
   out=$(FM_SUPERVISOR_TARGET=explicit:target TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p9 discover_supervisor_target)
@@ -1082,6 +1100,7 @@ test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_harness_precedence
+test_cursor_supervisor_refuses_non_tmux_backend
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
 test_pane_is_busy_herdr_falls_back_to_capture_regex

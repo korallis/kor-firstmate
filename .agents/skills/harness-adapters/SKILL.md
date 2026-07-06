@@ -246,4 +246,5 @@ There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is
 
 **Backend note.** Verified on the tmux reference backend.
 `fm-spawn` refuses cursor on non-tmux backends because cursor submit verification is only implemented for tmux's harness-scoped `→ ` row detector.
+The away-mode supervisor path applies the same gate: a cursor primary is only verified when `FM_SUPERVISOR_BACKEND` resolves to tmux.
 herdr, zellij, Orca, and cmux cursor support are unverified follow-ups.

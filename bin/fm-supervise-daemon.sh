@@ -930,6 +930,24 @@ fm_super_main() {
   FM_SUPERVISOR_BACKEND="$discovered_backend"
   local BACKEND="$FM_SUPERVISOR_BACKEND"
 
+  # --- auto-discover the supervisor HARNESS (cursor vs other agent) ---------
+  local discovered_harness harness_source
+  harness_source="FM_SUPERVISOR_HARNESS"
+  if [ -z "${FM_SUPERVISOR_HARNESS:-}" ]; then
+    harness_source="fm-harness"
+  fi
+  discovered_harness=$(discover_supervisor_harness) || true
+  FM_SUPERVISOR_HARNESS="$discovered_harness"
+  local SUPERVISOR_HARNESS="$FM_SUPERVISOR_HARNESS"
+
+  if [ "$SUPERVISOR_HARNESS" = cursor ] && [ "$BACKEND" != tmux ]; then
+    echo "error: cursor supervisor is only verified on the tmux backend; $BACKEND cursor support is a separate verified follow-up" >&2
+    log "startup failed: cursor supervisor unsupported backend '$BACKEND' (backend_source=$backend_source; harness_source=$harness_source)"
+    fm_lock_release "$LOCK" 2>/dev/null || true
+    rm -f "$PIDFILE" 2>/dev/null || true
+    exit 1
+  fi
+
   # --- refuse an unsupported supervisor backend loudly, before ever trying a
   # tmux/herdr-specific call against it (zellij, orca, and cmux have no verified
   # composer/busy primitives wired up for this daemon yet - AGENTS.md section 4
@@ -942,16 +960,6 @@ fm_super_main() {
     rm -f "$PIDFILE" 2>/dev/null || true
     exit 1
   fi
-
-  # --- auto-discover the supervisor HARNESS (cursor vs other agent) ---------
-  local discovered_harness harness_source
-  harness_source="FM_SUPERVISOR_HARNESS"
-  if [ -z "${FM_SUPERVISOR_HARNESS:-}" ]; then
-    harness_source="fm-harness"
-  fi
-  discovered_harness=$(discover_supervisor_harness) || true
-  FM_SUPERVISOR_HARNESS="$discovered_harness"
-  local SUPERVISOR_HARNESS="$FM_SUPERVISOR_HARNESS"
 
   # --- auto-discover the supervisor target (the pane running firstmate) -----
   # Priority: FM_SUPERVISOR_TARGET override > $TMUX_PANE (tmux; inherited from
