@@ -108,7 +108,10 @@ remove_cursor_hook() {
   hooks=$(cursor_hooks_path_for_cleanup "$wt" || true)
   [ -n "$hooks" ] || return 0
   git -C "$wt" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1 && return 0
-  created=$([ -n "$meta" ] && [ -f "$meta" ] && meta_value "$meta" cursor_hook_created || true)
+  created=
+  if [ -n "$meta" ] && [ -f "$meta" ]; then
+    created=$(meta_value "$meta" cursor_hook_created || true)
+  fi
   if [ "$created" = 1 ]; then
     rm -f "$hooks"
     return 0
