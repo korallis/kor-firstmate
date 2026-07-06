@@ -230,12 +230,15 @@ The file is kept out of git via `info/exclude` like the other harnesses' worktre
 If `.cursor/hooks.json` is already tracked by the project, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
 If an existing untracked `.cursor/hooks.json` is valid JSON and `jq` is available, `fm-spawn` merges its current stop command while replacing any prior firstmate stop command that touched a `*.turn-ended` path.
 If an existing file is unparseable or `jq` is missing, `fm-spawn` leaves it untouched and warns instead of overwriting it.
-`fm-teardown` removes only the stop command for that task's `*.turn-ended` file, and deletes `.cursor/hooks.json` only when firstmate created it fresh during that spawn and no other hooks remain.
+When firstmate created `.cursor/hooks.json` fresh during spawn, `fm-teardown` removes the file directly without requiring `jq`.
+When firstmate merged into a pre-existing local hook file, `fm-teardown` uses `jq` to remove only the stop command for that task's `*.turn-ended` file and preserves the rest of the file.
 Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
-So `fm_tmux_composer_state` reads the `#{cursor_y}` row and then scans the pane tail for cursor's `→ ` composer row.
-An exact `→ Add a follow-up` row is empty, a busy footer row is empty, and any other `→ ` row is pending unsubmitted text.
-As a defensive backstop for terminals/versions where the cursor DOES rest on the placeholder row, `FM_TMUX_COMPOSER_IDLE_RE_DEFAULT` (`bin/fm-tmux-lib.sh`) exactly matches cursor's idle placeholder `Add a follow-up` with its optional arrow prompt so it never reads as pending input; the pattern is cursor-specific and inert for other harnesses.
+So `fm_tmux_composer_state` resolves the target's recorded harness from `state/<id>.meta` for `fm-<id>` windows and returns `unknown` for cursor panes instead of pretending the `#{cursor_y}` row proves empty or pending.
+That is lenient for `fm-send` submit verification, avoids false empty success on off-row composer text, and avoids wedging on the non-empty footer/path row.
+There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
 
-**Backend note.** Verified on the tmux reference backend. Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook. cursor's composer is borderless, so herdr's and Orca's structural composer detectors return `unknown` (handled leniently by `fm-send`).
+**Backend note.** Verified on the tmux reference backend.
+Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook.
+cursor's composer is borderless, so tmux, herdr, and Orca composer detectors return `unknown` (handled leniently by `fm-send`).

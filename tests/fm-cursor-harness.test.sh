@@ -79,6 +79,7 @@ set -u
 case "${1:-}" in
   display-message)
     for a in "$@"; do
+      case "$a" in *window_name*) printf '%s\n' "${FM_FAKE_WINDOW_NAME:-fakepane}"; exit 0 ;; esac
       case "$a" in *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;; esac
     done
     printf 'fakepane\n'; exit 0 ;;
@@ -302,10 +303,15 @@ test_cursor_teardown_is_clean() {
   status=$?
   expect_code 0 "$status" "cursor spawn should succeed before teardown"
   assert_present "$WT_DIR/.cursor/hooks.json" "cursor hook missing before teardown"
+  cat > "$FAKEBIN_DIR/jq" <<'SH'
+#!/usr/bin/env bash
+exit 127
+SH
+  chmod +x "$FAKEBIN_DIR/jq"
 
   FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
     PATH="$FAKEBIN_DIR:$PATH" "$TEARDOWN" "$ID" --force >/dev/null 2>&1 \
-    || fail "cursor teardown failed"
+    || fail "cursor teardown failed without jq"
   assert_absent "$WT_DIR/.cursor/hooks.json" "cursor hook survived teardown"
   assert_absent "$HOME_DIR/state/$ID.meta" "cursor meta survived teardown"
   pass "cursor worktree tears down cleanly (the excluded hook never blocks the dirty check)"
@@ -362,24 +368,42 @@ test_cursor_busy_regex_requires_footer_pairing() {
   pass "cursor busy detection requires the follow-up footer and interrupt hint"
 }
 
-test_cursor_off_row_composer_state() {
-  local dir fb tail cursor state
+test_cursor_meta_target_composer_state_is_unknown() {
+  local dir fb tail cursor state id
   dir="$TMP_ROOT/cursor-composer"; mkdir -p "$dir"
+  mkdir -p "$dir/state"
   fb=$(make_cursor_state_fakebin "$dir")
   tail="$dir/tail.txt"
   cursor="$dir/cursor-line.txt"
-  : > "$cursor"
-
-  printf 'output\n→ Add a follow-up\n/Users/example/project\n' > "$tail"
-  state=$(PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
-    fm_tmux_composer_state "fakepane")
-  [ "$state" = empty ] || fail "cursor idle placeholder read as $state, expected empty"
+  id="cursor-composer-x1"
+  printf 'harness=cursor\n' > "$dir/state/$id.meta"
+  printf '/Users/example/project\n' > "$cursor"
 
   printf 'output\n→ Add a follow-up to the issue\n/Users/example/project\n' > "$tail"
-  state=$(PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+  state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
     fm_tmux_composer_state "fakepane")
-  [ "$state" = pending ] || fail "cursor off-row unsubmitted text read as $state, expected pending"
-  pass "cursor composer state reads off-row placeholder as empty and real text as pending"
+  [ "$state" = unknown ] || fail "cursor composer state read as $state, expected unknown"
+  pass "cursor composer state returns unknown for metadata-confirmed cursor panes"
+}
+
+test_non_cursor_composer_ignores_arrow_tail_output() {
+  local dir fb tail cursor state id
+  dir="$TMP_ROOT/noncursor-arrow-tail"; mkdir -p "$dir"
+  mkdir -p "$dir/state"
+  fb=$(make_cursor_state_fakebin "$dir")
+  tail="$dir/tail.txt"
+  cursor="$dir/cursor-line.txt"
+  id="claude-composer-x1"
+  printf 'harness=claude\n' > "$dir/state/$id.meta"
+  : > "$cursor"
+
+  printf 'output\n→ deploy staging\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_STATE_OVERRIDE="$dir/state" FM_FAKE_WINDOW_NAME="fm-$id" \
+    FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = empty ] || fail "non-cursor empty composer read as $state after arrow tail output"
+  pass "non-cursor composer state ignores arrow-prefixed tail output"
 }
 
 test_fm_harness_detects_cursor_env_marker() {
@@ -442,7 +466,8 @@ test_cursor_skips_tracked_project_hooks
 test_cursor_teardown_is_clean
 test_cursor_teardown_preserves_existing_local_hooks
 test_cursor_busy_regex_requires_footer_pairing
-test_cursor_off_row_composer_state
+test_cursor_meta_target_composer_state_is_unknown
+test_non_cursor_composer_ignores_arrow_tail_output
 test_fm_harness_detects_cursor_env_marker
 test_fm_harness_detects_cursor_ancestry
 test_fm_lock_recognizes_cursor_holder

@@ -109,6 +109,10 @@ remove_cursor_hook() {
   hooks="$wt/.cursor/hooks.json"
   git -C "$wt" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1 && return 0
   created=$([ -n "$meta" ] && [ -f "$meta" ] && meta_value "$meta" cursor_hook_created || true)
+  if [ "$created" = 1 ]; then
+    rm -f "$hooks"
+    return 0
+  fi
   if ! command -v jq >/dev/null 2>&1; then
     echo "warning: cursor hook cleanup skipped for $wt: jq is required to preserve local hooks" >&2
     return 0

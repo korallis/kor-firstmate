@@ -27,9 +27,9 @@
 # single composer row is captured, so no escape-laden pane bulk is produced. This
 # is harness-generic: any harness that dims placeholder/ghost text benefits.
 #
-# Per-harness override: FM_COMPOSER_IDLE_RE matches an empty composer after
-# dim-ghost and structural border stripping. FM_BUSY_REGEX overrides the busy
-# footer set (mirrors fm-watch.sh / the daemon).
+# Per-harness override: FM_COMPOSER_IDLE_RE optionally matches an empty composer
+# after dim-ghost and structural border stripping. FM_BUSY_REGEX overrides the
+# busy footer set (mirrors fm-watch.sh / the daemon).
 #
 # All functions are `set -u` and `set -e` safe (guarded tmux calls, explicit
 # returns) so they can be sourced into either context.
@@ -40,15 +40,6 @@
 # cursor: the mid-turn footer includes both the idle placeholder and interrupt hint,
 # e.g. "Add a follow-up ... ctrl+c to stop" (verified cursor-agent 2026.07.01).
 FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|Add a follow-up.*ctrl\+c to stop'
-
-# Known empty-composer placeholder text, matched after dim-ghost and border
-# stripping so it never reads as pending input. cursor: "Add a follow-up" (the
-# Cursor CLI's idle-composer placeholder). cursor also parks the terminal cursor
-# OFF the composer row when idle, so this row is usually classified empty before
-# reaching here; this default is the defensive backstop for the terminals/versions
-# where the cursor DOES rest on the placeholder row. cursor-specific text, so it is
-# inert for every other harness's composer (verified cursor-agent 2026.07.01).
-FM_TMUX_COMPOSER_IDLE_RE_DEFAULT='^(→ )?Add a follow-up$'
 
 # fm_tmux_strip_ghost: remove dim/faint (ANSI SGR 2) styled runs from one captured
 # composer line, then drop any remaining escape sequences, leaving only the plain,
@@ -124,28 +115,26 @@ fm_tmux_strip_composer_borders() {
   printf '%s' "$stripped"
 }
 
-fm_tmux_cursor_composer_tail_state() {
-  local target=$1 raw tail_line line stripped cursor_line cursor_text
-  cursor_line=
-  raw=$(tmux capture-pane -e -p -t "$target" -S -40 2>/dev/null) || { printf 'unknown'; return 0; }
-  while IFS= read -r tail_line; do
-    line=$(printf '%s\n' "$tail_line" | fm_tmux_strip_ghost)
-    stripped=$(fm_tmux_strip_composer_borders "$line")
-    case "$stripped" in
-      '→ '*) cursor_line=$stripped ;;
-    esac
-  done <<EOF
-$raw
-EOF
-  [ -n "$cursor_line" ] || { printf 'unknown'; return 0; }
-  if printf '%s' "$cursor_line" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
-    printf 'empty'; return 0
+fm_tmux_target_harness() {
+  local target=$1 win id state_dir meta harness
+  win=$(tmux display-message -p -t "$target" '#{window_name}' 2>/dev/null) || return 1
+  case "$win" in
+    fm-*) id=${win#fm-} ;;
+    *) return 1 ;;
+  esac
+  case "$id" in ''|*/*|*'..'*) return 1 ;; esac
+  if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
+    state_dir=$FM_STATE_OVERRIDE
+  elif [ -n "${FM_HOME:-}" ]; then
+    state_dir=$FM_HOME/state
+  else
+    return 1
   fi
-  cursor_text=${cursor_line#→ }
-  cursor_text="${cursor_text#"${cursor_text%%[![:space:]]*}"}"
-  cursor_text="${cursor_text%"${cursor_text##*[![:space:]]}"}"
-  [ "$cursor_text" = "Add a follow-up" ] && { printf 'empty'; return 0; }
-  printf 'pending'; return 0
+  meta="$state_dir/$id.meta"
+  [ -f "$meta" ] || return 1
+  harness=$(grep '^harness=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$harness" ] || return 1
+  printf '%s' "$harness"
 }
 
 # fm_tmux_composer_state: classify the cursor/composer line of <target> as
@@ -164,7 +153,9 @@ EOF
 # substitution (bash 3.2 safe, locale-independent — no \u escapes, no multibyte
 # character classes), and asks whether anything real is left.
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw line stripped tail_state
+  local target=$1 cy raw line stripped target_harness
+  target_harness=$(fm_tmux_target_harness "$target" || true)
+  [ "$target_harness" = cursor ] && { printf 'unknown'; return 0; }
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
@@ -173,12 +164,9 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
   stripped=$(fm_tmux_strip_composer_borders "$line")
   # Nothing left inside the box = empty composer.
   if [ -z "$stripped" ]; then
-    tail_state=$(fm_tmux_cursor_composer_tail_state "$target")
-    [ "$tail_state" = pending ] && { printf 'pending'; return 0; }
-    [ "$tail_state" = empty ] && { printf 'empty'; return 0; }
     printf 'empty'; return 0
   fi
-  if printf '%s' "$stripped" | grep -qiE "${FM_COMPOSER_IDLE_RE:-$FM_TMUX_COMPOSER_IDLE_RE_DEFAULT}"; then
+  if [ -n "${FM_COMPOSER_IDLE_RE:-}" ] && printf '%s' "$stripped" | grep -qiE "$FM_COMPOSER_IDLE_RE"; then
     printf 'empty'; return 0
   fi
   # Just a bare prompt glyph = empty composer (idle).
