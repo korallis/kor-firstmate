@@ -15,7 +15,11 @@ set -u
 SPAWN="$ROOT/bin/fm-spawn.sh"
 TEARDOWN="$ROOT/bin/fm-teardown.sh"
 HARNESS="$ROOT/bin/fm-harness.sh"
+TMUX_LIB="$ROOT/bin/fm-tmux-lib.sh"
 TMP_ROOT=$(fm_test_tmproot fm-cursor-harness)
+
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$TMUX_LIB"
 
 make_spawn_fakebin() {
   local dir=$1 fakebin
@@ -64,6 +68,38 @@ make_spawn_case() {
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$launchlog|$id"
+}
+
+make_cursor_state_fakebin() {
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "${1:-}" in
+  display-message)
+    for a in "$@"; do
+      case "$a" in *cursor_y*) printf '%s\n' "${FM_FAKE_CY:-0}"; exit 0 ;; esac
+    done
+    printf 'fakepane\n'; exit 0 ;;
+  capture-pane)
+    single=0
+    prev=
+    for a in "$@"; do
+      [ "$prev" = "-E" ] && single=1
+      prev=$a
+    done
+    if [ "$single" = 1 ]; then
+      cat "${FM_FAKE_CURSOR_LINE:-/dev/null}" 2>/dev/null
+    else
+      cat "${FM_FAKE_TAIL:-/dev/null}" 2>/dev/null
+    fi
+    exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fakebin/tmux"
+  printf '%s\n' "$fakebin"
 }
 
 read_case_record() {
@@ -275,6 +311,77 @@ test_cursor_teardown_is_clean() {
   pass "cursor worktree tears down cleanly (the excluded hook never blocks the dirty check)"
 }
 
+test_cursor_teardown_preserves_existing_local_hooks() {
+  local rec out status hooks
+  rec=$(make_spawn_case teardown-preserve-local)
+  read_case_record "$rec"
+  command -v jq >/dev/null 2>&1 || { pass "cursor teardown local-hook preservation skipped (jq unavailable)"; return; }
+
+  mkdir -p "$WT_DIR/.cursor"
+  printf '{"version":1,"hooks":{"afterFileEdit":[{"command":"./format.sh"}]}}\n' \
+    > "$WT_DIR/.cursor/hooks.json"
+
+  out=$(run_cursor_spawn "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$ID" cursor)
+  status=$?
+  expect_code 0 "$status" "cursor spawn should succeed before preserving local hooks"
+
+  hooks="$WT_DIR/.cursor/hooks.json"
+  jq -e --arg id "$ID" '.hooks.stop[] | select(.command | contains($id + ".turn-ended"))' "$hooks" >/dev/null \
+    || fail "cursor spawn did not add the task stop hook before teardown"
+
+  FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    PATH="$FAKEBIN_DIR:$PATH" "$TEARDOWN" "$ID" --force >/dev/null 2>&1 \
+    || fail "cursor teardown failed"
+
+  assert_present "$hooks" "cursor teardown removed a pre-existing local hooks.json"
+  jq -e '.hooks.afterFileEdit[0].command == "./format.sh"' "$hooks" >/dev/null \
+    || fail "cursor teardown did not preserve the local project hook"
+  ! jq -e '[.hooks.stop[]?.command | select(contains("turn-ended"))] | length > 0' "$hooks" >/dev/null \
+    || fail "cursor teardown left firstmate's stop hook in the local hooks file"
+  pass "cursor teardown preserves pre-existing local hooks while removing firstmate's stop hook"
+}
+
+test_cursor_busy_regex_requires_footer_pairing() {
+  local dir fb tail cursor
+  dir="$TMP_ROOT/cursor-busy"; mkdir -p "$dir"
+  fb=$(make_cursor_state_fakebin "$dir")
+  tail="$dir/tail.txt"
+  cursor="$dir/cursor-line.txt"
+  : > "$cursor"
+
+  printf 'server ready\nPress Ctrl+C to stop\n' > "$tail"
+  if PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+     fm_pane_is_busy "fakepane"; then
+    fail "generic Ctrl+C process output falsely read as cursor busy"
+  fi
+
+  printf '→ Add a follow-up                    ctrl+c to stop\n' > "$tail"
+  PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_pane_is_busy "fakepane" \
+    || fail "cursor busy footer was not detected"
+  pass "cursor busy detection requires the follow-up footer and interrupt hint"
+}
+
+test_cursor_off_row_composer_state() {
+  local dir fb tail cursor state
+  dir="$TMP_ROOT/cursor-composer"; mkdir -p "$dir"
+  fb=$(make_cursor_state_fakebin "$dir")
+  tail="$dir/tail.txt"
+  cursor="$dir/cursor-line.txt"
+  : > "$cursor"
+
+  printf 'output\n→ Add a follow-up\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = empty ] || fail "cursor idle placeholder read as $state, expected empty"
+
+  printf 'output\n→ Add a follow-up to the issue\n/Users/example/project\n' > "$tail"
+  state=$(PATH="$fb:$PATH" FM_FAKE_TAIL="$tail" FM_FAKE_CURSOR_LINE="$cursor" \
+    fm_tmux_composer_state "fakepane")
+  [ "$state" = pending ] || fail "cursor off-row unsubmitted text read as $state, expected pending"
+  pass "cursor composer state reads off-row placeholder as empty and real text as pending"
+}
+
 test_fm_harness_detects_cursor_env_marker() {
   local out
   # env -u clears the runner's own harness markers (this suite may run under any
@@ -333,6 +440,9 @@ test_cursor_merges_existing_project_hooks
 test_cursor_replaces_prior_firstmate_stop_hook
 test_cursor_skips_tracked_project_hooks
 test_cursor_teardown_is_clean
+test_cursor_teardown_preserves_existing_local_hooks
+test_cursor_busy_regex_requires_footer_pairing
+test_cursor_off_row_composer_state
 test_fm_harness_detects_cursor_env_marker
 test_fm_harness_detects_cursor_ancestry
 test_fm_lock_recognizes_cursor_holder

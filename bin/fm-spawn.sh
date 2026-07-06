@@ -859,6 +859,7 @@ mkdir -p "$TASK_TMP/gotmp"
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
+CURSOR_HOOK_CREATED=0
 exclude_path() {
   local rel=$1 EXCL
   EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
@@ -998,6 +999,7 @@ EOF
         printf '{"version":1,"hooks":{"stop":[{"command":"%s"}]}}\n' \
           "$(json_escape "$cursor_cmd")" > "$cursor_hooks"
         cursor_wrote=1
+        CURSOR_HOOK_CREATED=1
       fi
       [ "$cursor_wrote" -eq 0 ] || exclude_path '.cursor/hooks.json'
       ;;
@@ -1037,6 +1039,7 @@ META_WINDOW=$T
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
   [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+  [ "$CURSOR_HOOK_CREATED" = 1 ] && echo "cursor_hook_created=1"
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"

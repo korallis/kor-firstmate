@@ -204,7 +204,7 @@ firstmate uses the DEFAULT interactive TUI, not `-p/--print` (crewmates are pers
 
 | Fact | Value |
 |---|---|
-| Busy-pane signature | `ctrl+c to stop` (the mid-turn interrupt hint in the footer, shown iff a turn is running; the spinner line is a braille glyph + `Composing`, e.g. `⠸ Composing`). Idle footer shows only `→ Add a follow-up` with no `ctrl+c to stop`. The ASCII `ctrl+c to stop` is the busy regex (avoids locale fragility of matching the braille spinner). |
+| Busy-pane signature | `Add a follow-up.*ctrl\+c to stop` (the mid-turn footer contains both the idle placeholder and interrupt hint, shown iff a turn is running; the spinner line is a braille glyph + `Composing`, e.g. `⠸ Composing`). Idle footer shows only `→ Add a follow-up` with no `ctrl+c to stop`. Requiring the placeholder and interrupt hint on the same line prevents generic output like `Press Ctrl+C to stop` from reading as an agent busy footer. |
 | Exit command | double `Ctrl+C` when idle (single press when idle is a no-op; the app survives). Prints `To resume this session: agent --resume=<chatId>`. NOT `/exit`, NOT `/quit`. |
 | Interrupt | single `Ctrl+C` mid-turn cancels the current turn and returns to idle without killing the app (the footer shows `ctrl+c to stop` mid-turn). |
 | Skill invocation | `/<skill>` (e.g. `/no-mistakes`), same form as claude; skills surface as TUI slash commands. Opens a slash-autocomplete popup, so `fm-send`'s retried Enter lands it. |
@@ -230,11 +230,12 @@ The file is kept out of git via `info/exclude` like the other harnesses' worktre
 If `.cursor/hooks.json` is already tracked by the project, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
 If an existing untracked `.cursor/hooks.json` is valid JSON and `jq` is available, `fm-spawn` merges its current stop command while replacing any prior firstmate stop command that touched a `*.turn-ended` path.
 If an existing file is unparseable or `jq` is missing, `fm-spawn` leaves it untouched and warns instead of overwriting it.
+`fm-teardown` removes only the stop command for that task's `*.turn-ended` file, and deletes `.cursor/hooks.json` only when firstmate created it fresh during that spawn and no other hooks remain.
 Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
 
 **Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
-So `fm_tmux_composer_state` reads that (blank) row and classifies the pane empty - correct for idle, but it means typed-but-unsubmitted text on the composer row is NOT seen through `cursor_y` alone.
-Submit still works because `Enter` reliably submits in cursor (verified), so `fm_tmux_submit_core` reads "empty" as "landed" without false retries.
+So `fm_tmux_composer_state` reads the `#{cursor_y}` row and then scans the pane tail for cursor's `→ ` composer row.
+An exact `→ Add a follow-up` row is empty, a busy footer row is empty, and any other `→ ` row is pending unsubmitted text.
 As a defensive backstop for terminals/versions where the cursor DOES rest on the placeholder row, `FM_TMUX_COMPOSER_IDLE_RE_DEFAULT` (`bin/fm-tmux-lib.sh`) exactly matches cursor's idle placeholder `Add a follow-up` with its optional arrow prompt so it never reads as pending input; the pattern is cursor-specific and inert for other harnesses.
 
 **Backend note.** Verified on the tmux reference backend. Under herdr, busy-state comes from herdr's native agent tracking (herdr ships a cursor integration; its pre-installed `~/.cursor/hooks.json` `sessionStart` hook reports the agent session), with the shared busy regex as the `unknown`-state fallback; turn-end works identically via the per-worktree project `stop` hook. cursor's composer is borderless, so herdr's and Orca's structural composer detectors return `unknown` (handled leniently by `fm-send`).

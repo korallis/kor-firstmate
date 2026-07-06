@@ -111,9 +111,9 @@ SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trai
 # grok: "Ctrl+c:cancel" (the mid-turn cancel hint in grok's keybind bar, shown iff a
 # turn is running; absent when idle - verified grok 0.2.73, ASCII to avoid the
 # locale fragility of matching grok's braille spinner glyph directly).
-# cursor: "ctrl+c to stop" (Cursor CLI's mid-turn interrupt hint, shown iff a turn is
-# running; absent when idle - verified cursor-agent 2026.07.01, same ASCII rationale).
-BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'}
+# cursor: the mid-turn footer includes both the idle placeholder and interrupt hint,
+# e.g. "Add a follow-up ... ctrl+c to stop" (verified cursor-agent 2026.07.01).
+BUSY_REGEX=${FM_BUSY_REGEX:-'esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|Add a follow-up.*ctrl\+c to stop'}
 # Always-on wake triage: most wakes during a long crew validation are benign (a
 # working: note or turn-end while a pipeline runs, a no-change heartbeat). Rather
 # than wake firstmate's LLM for each, this watcher classifies every wake in bash

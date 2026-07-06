@@ -37,9 +37,9 @@
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
 # (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
-# cursor: "ctrl+c to stop" (Cursor CLI's mid-turn interrupt hint, shown iff a turn
-# is running - verified cursor-agent 2026.07.01).
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|ctrl\+c to stop'
+# cursor: the mid-turn footer includes both the idle placeholder and interrupt hint,
+# e.g. "Add a follow-up ... ctrl+c to stop" (verified cursor-agent 2026.07.01).
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|Add a follow-up.*ctrl\+c to stop'
 
 # Known empty-composer placeholder text, matched after dim-ghost and border
 # stripping so it never reads as pending input. cursor: "Add a follow-up" (the
@@ -114,6 +114,40 @@ fm_tmux_strip_ghost() {
   '
 }
 
+fm_tmux_strip_composer_borders() {
+  local line=$1 stripped
+  stripped=${line//│/}
+  stripped=${stripped//┃/}
+  stripped=${stripped//|/}
+  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  printf '%s' "$stripped"
+}
+
+fm_tmux_cursor_composer_tail_state() {
+  local target=$1 raw tail_line line stripped cursor_line cursor_text
+  cursor_line=
+  raw=$(tmux capture-pane -e -p -t "$target" -S -40 2>/dev/null) || { printf 'unknown'; return 0; }
+  while IFS= read -r tail_line; do
+    line=$(printf '%s\n' "$tail_line" | fm_tmux_strip_ghost)
+    stripped=$(fm_tmux_strip_composer_borders "$line")
+    case "$stripped" in
+      '→ '*) cursor_line=$stripped ;;
+    esac
+  done <<EOF
+$raw
+EOF
+  [ -n "$cursor_line" ] || { printf 'unknown'; return 0; }
+  if printf '%s' "$cursor_line" | grep -qiE "${FM_BUSY_REGEX:-$FM_TMUX_BUSY_REGEX_DEFAULT}"; then
+    printf 'empty'; return 0
+  fi
+  cursor_text=${cursor_line#→ }
+  cursor_text="${cursor_text#"${cursor_text%%[![:space:]]*}"}"
+  cursor_text="${cursor_text%"${cursor_text##*[![:space:]]}"}"
+  [ "$cursor_text" = "Add a follow-up" ] && { printf 'empty'; return 0; }
+  printf 'pending'; return 0
+}
+
 # fm_tmux_composer_state: classify the cursor/composer line of <target> as
 #   empty   - no pending input (blank, a bare prompt, a busy footer, or only dim
 #             ghost/placeholder text). Safe to inject; also the positive
@@ -130,20 +164,20 @@ fm_tmux_strip_ghost() {
 # substitution (bash 3.2 safe, locale-independent — no \u escapes, no multibyte
 # character classes), and asks whether anything real is left.
 fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw line stripped
+  local target=$1 cy raw line stripped tail_state
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   line=$(printf '%s\n' "$raw" | fm_tmux_strip_ghost)
   # Strip the composer box borders (literal glyphs — no character classes).
-  stripped=${line//│/}      # U+2502 light vertical (claude)
-  stripped=${stripped//┃/}  # U+2503 heavy vertical
-  stripped=${stripped//|/}  # ASCII pipe
-  # Trim surrounding whitespace.
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  stripped=$(fm_tmux_strip_composer_borders "$line")
   # Nothing left inside the box = empty composer.
-  [ -n "$stripped" ] || { printf 'empty'; return 0; }
+  if [ -z "$stripped" ]; then
+    tail_state=$(fm_tmux_cursor_composer_tail_state "$target")
+    [ "$tail_state" = pending ] && { printf 'pending'; return 0; }
+    [ "$tail_state" = empty ] && { printf 'empty'; return 0; }
+    printf 'empty'; return 0
+  fi
   if printf '%s' "$stripped" | grep -qiE "${FM_COMPOSER_IDLE_RE:-$FM_TMUX_COMPOSER_IDLE_RE_DEFAULT}"; then
     printf 'empty'; return 0
   fi
