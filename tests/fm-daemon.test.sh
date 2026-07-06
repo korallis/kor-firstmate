@@ -20,6 +20,7 @@ if [ -z "${FM_TEST_DAEMON_SOURCED:-}" ]; then
   . "$DAEMON"
 fi
 
+# shellcheck disable=SC2034
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 
 
@@ -822,6 +823,35 @@ test_discover_supervisor_backend_precedence() {
   pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > tmux fallback"
 }
 
+test_discover_supervisor_harness_precedence() {
+  local out
+  out=$(FM_SUPERVISOR_HARNESS=cursor discover_supervisor_harness)
+  [ "$out" = cursor ] || fail "explicit FM_SUPERVISOR_HARNESS override was not honored: $out"
+
+  out=$(FM_SUPERVISOR_HARNESS='' CLAUDECODE='' PI_CODING_AGENT='' GROK_AGENT='' CURSOR_AGENT=1 discover_supervisor_harness)
+  [ "$out" = cursor ] || fail "cursor supervisor harness was not detected from CURSOR_AGENT: $out"
+
+  pass "discover_supervisor_harness: override > fm-harness detection"
+}
+
+test_cursor_supervisor_refuses_non_tmux_backend() {
+  local dir state out status
+  dir=$(make_supercase cursor-supervisor-herdr)
+  state="$dir/state"
+
+  out=$(FM_STATE_OVERRIDE="$state" FM_HOME="$dir/home" FM_SUPERVISOR_BACKEND=herdr \
+    FM_SUPERVISOR_HARNESS=cursor FM_SUPERVISOR_TARGET="default:w1:p2" \
+    TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' "$DAEMON" 2>&1)
+  status=$?
+  expect_code 1 "$status" "cursor supervisor on herdr should be refused"
+  assert_contains "$out" "error: cursor supervisor is only verified on the tmux backend" \
+    "cursor supervisor refusal did not explain the tmux-only gate"
+  assert_contains "$out" "herdr cursor support is a separate verified follow-up" \
+    "cursor supervisor refusal did not identify herdr as a follow-up"
+  assert_absent "$state/.supervise-daemon.pid" "cursor supervisor refusal left a pidfile"
+  pass "cursor supervisor refuses non-tmux backends at startup"
+}
+
 test_discover_supervisor_target_herdr() {
   local out
   out=$(FM_SUPERVISOR_TARGET=explicit:target TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p9 discover_supervisor_target)
@@ -895,6 +925,30 @@ test_pane_input_pending_herdr_dispatch() {
   pass "pane_input_pending: dispatches through fm_backend_composer_state for backend=herdr"
 }
 
+test_pane_input_pending_tmux_harness_override_dispatch() {
+  (
+    fm_backend_composer_state() {
+      [ "$1" = tmux ] && [ "$2" = "fakepane" ] && [ "${3:-}" = cursor ] \
+        || fail "unexpected composer_state args: $*"
+      printf 'pending'
+    }
+    pane_input_pending "fakepane" tmux cursor \
+      || fail "pane_input_pending should pass the cursor override to tmux composer_state"
+  ) || fail "tmux harness-override pane_input_pending subshell failed"
+
+  (
+    fm_backend_composer_state() {
+      [ "$#" = 2 ] && [ "$1" = tmux ] && [ "$2" = "fakepane" ] \
+        || fail "unexpected no-override composer_state args: $*"
+      printf 'empty'
+    }
+    if pane_input_pending "fakepane" tmux; then
+      fail "pane_input_pending should not pass an empty harness override"
+    fi
+  ) || fail "tmux no-override pane_input_pending subshell failed"
+  pass "pane_input_pending passes a tmux harness override only when present"
+}
+
 test_inject_msg_herdr_busy_guard_defers() {
   local dir state
   dir=$(make_supercase inject-herdr-busy)
@@ -945,6 +999,38 @@ test_inject_msg_herdr_pane_gone_defers() {
     fi
   ) || fail "herdr pane-gone inject_msg subshell failed"
   pass "inject_msg: herdr pane-gone check defers before any busy/composer/submit call"
+}
+
+test_inject_msg_tmux_passes_supervisor_harness_override() {
+  local dir state composer_seen submit_seen
+  dir=$(make_supercase inject-tmux-cursor-supervisor)
+  state="$dir/state"
+  composer_seen="$dir/composer.seen"
+  submit_seen="$dir/submit.seen"
+  afk_enter "$state"
+  (
+    fm_backend_target_exists() { [ "$1" = tmux ] && [ "$2" = "fakepane" ] || fail "unexpected target_exists args: $*"; return 0; }
+    fm_backend_busy_state() { printf 'idle'; }
+    fm_backend_capture() { printf 'idle prompt\n'; }
+    fm_backend_composer_state() {
+      [ "$1" = tmux ] && [ "$2" = "fakepane" ] && [ "${3:-}" = cursor ] \
+        || fail "unexpected composer_state args: $*"
+      : > "$composer_seen"
+      printf 'empty'
+    }
+    fm_backend_send_text_submit() {
+      [ "$1" = tmux ] && [ "$2" = "fakepane" ] && [ "${7-}" = "" ] && [ "${8:-}" = cursor ] \
+        || fail "unexpected send_text_submit args: $*"
+      : > "$submit_seen"
+      printf 'empty'
+    }
+    FM_SUPERVISOR_BACKEND=tmux FM_SUPERVISOR_TARGET="fakepane" FM_SUPERVISOR_HARNESS=cursor \
+      inject_msg "hello" "$state" \
+      || fail "inject_msg should submit when tmux supervisor override is cursor"
+    [ -f "$composer_seen" ] || fail "composer guard did not run"
+    [ -f "$submit_seen" ] || fail "submit confirmation did not run"
+  ) || fail "tmux cursor-supervisor inject_msg subshell failed"
+  pass "inject_msg passes the cursor supervisor harness override to tmux checks"
 }
 
 test_inject_msg_herdr_submits_through_backend_dispatch() {
@@ -1014,13 +1100,17 @@ test_max_defer_afk_inactive_does_not_flush_or_alarm
 test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_discover_supervisor_backend_precedence
+test_discover_supervisor_harness_precedence
+test_cursor_supervisor_refuses_non_tmux_backend
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
 test_pane_is_busy_herdr_falls_back_to_capture_regex
 test_pane_is_busy_herdr_idle_falls_back_to_capture_regex
 test_pane_is_busy_defaults_to_tmux_when_backend_omitted
 test_pane_input_pending_herdr_dispatch
+test_pane_input_pending_tmux_harness_override_dispatch
 test_inject_msg_herdr_busy_guard_defers
 test_inject_msg_herdr_composer_guard_defers
 test_inject_msg_herdr_pane_gone_defers
+test_inject_msg_tmux_passes_supervisor_harness_override
 test_inject_msg_herdr_submits_through_backend_dispatch

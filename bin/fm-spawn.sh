@@ -23,6 +23,8 @@
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected
 #   (always explicit). Default tmux spawns do not write backend= to meta;
 #   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   The cursor harness is currently verified only on tmux and is refused on
+#   non-tmux backends until their cursor submit verification is implemented.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -32,7 +34,7 @@
 #   profile consultation. A --secondmate spawn is exempt and resolves the SECONDMATE
 #   harness (config/secondmate-harness -> config/crew-harness -> own), so the
 #   secondmate-vs-crewmate split is DURABLE across every respawn (recovery,
-#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok)
+#   /updatefirstmate, restart). A bare adapter name (claude|codex|opencode|pi|grok|cursor)
 #   overrides it for this spawn (either kind). A non-flag string containing
 #   whitespace is treated as a RAW launch command - the escape hatch for verifying
 #   new adapters.
@@ -73,6 +75,8 @@
 # Per-harness turn-end hooks are installed automatically; some live outside the worktree.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
+# cursor uses a per-worktree .cursor/hooks.json "stop" hook (gitignored via
+# info/exclude), which cursor layers on top of the user-level ~/.cursor/hooks.json.
 # On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> mode=<mode> yolo=<on|off> window=<backend-target> worktree=<path>
 # mode/yolo are resolved per-project from data/projects.md for ship/scout tasks;
 # secondmate spawns record mode=secondmate, yolo=off, home=, and projects=.
@@ -158,7 +162,6 @@ else
   BACKEND=$(fm_backend_name)
 fi
 fm_backend_validate_spawn "$BACKEND" || exit 1
-fm_backend_source "$BACKEND" || exit 1
 if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
   exit 1
@@ -166,9 +169,6 @@ fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=cmux does not support --secondmate spawns yet" >&2
   exit 1
-fi
-if [ "$BACKEND" = orca ]; then
-  fm_backend_orca_runtime_check || exit 1
 fi
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
@@ -267,7 +267,7 @@ FIRSTMATE_HOME=
 
 if [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
-    ''|claude|codex|opencode|pi|grok)
+    ''|claude|codex|opencode|pi|grok|cursor)
       ARG3=${POS[1]:-}
       ;;
     *' '*)
@@ -328,6 +328,16 @@ launch_template() {
     # launch command - it is a Stop-event hook installed below (global hook +
     # per-task pointer), so the template is identical for ship/scout/secondmate.
     grok) printf '%s' 'grok --always-approve __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
+    # cursor (Cursor CLI, cursor-agent): a positional prompt starts the supervised
+    # interactive TUI. --force (alias --yolo, "Run Everything") auto-approves every
+    # tool execution (verified: the crewmate edits files and runs shell fully
+    # autonomously, no permission gate), the targeted equivalent of claude's
+    # --dangerously-skip-permissions. Auth is the stored ~/.cursor session (Ultra),
+    # so no key is passed. cursor's turn-end signal does NOT ride the launch command
+    # - it is a per-worktree .cursor/hooks.json "stop" hook installed below - so the
+    # template is identical for ship/scout/secondmate. Effort is folded into the
+    # --model slug (model_flag_for_harness), so __EFFORTFLAG__ is always empty here.
+    cursor) printf '%s' 'cursor-agent --force __MODELFLAG____EFFORTFLAG__"$(cat __BRIEF__)"' ;;
     *) return 1 ;;
   esac
 }
@@ -367,6 +377,16 @@ case "$ARG3" in
     LAUNCH=$(launch_template "$HARNESS" "$KIND") || { echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2; exit 1; }
     ;;
 esac
+
+if [ "$HARNESS" = cursor ] && [ "$BACKEND" != tmux ]; then
+  echo "error: cursor harness is only verified on the tmux backend; herdr/zellij/orca/cmux support is not yet verified. Re-run on tmux or pick a verified harness." >&2
+  exit 1
+fi
+
+fm_backend_source "$BACKEND" || exit 1
+if [ "$BACKEND" = orca ]; then
+  fm_backend_orca_runtime_check || exit 1
+fi
 
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
@@ -412,11 +432,34 @@ shell_quote() {
 }
 
 model_flag_for_harness() {
-  local harness=$1 model=$2
+  local harness=$1 model=$2 effort=${3:-}
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
     claude|codex|opencode|pi|grok)
       printf -- '--model %s ' "$(shell_quote "$model")"
+      ;;
+    cursor)
+      # cursor-agent has ONE --model flag and expresses reasoning effort as a
+      # model-slug SUFFIX (--model 'claude-opus-4-8-high'), NOT a separate flag.
+      # The bracket form 'slug[effort=high]' is rejected by cursor's model
+      # validator - verified only exact slugs from `cursor-agent models` are
+      # accepted, in both -p and interactive modes - so effort is folded into the
+      # slug here and effort_flag_for_harness emits nothing for cursor. firstmate's
+      # effort vocab (low|medium|high|xhigh|max) maps 1:1 only onto the Claude
+      # 1M families (claude-opus-4-8, claude-sonnet-5, claude-fable-5,
+      # claude-opus-4-7), whose exact slugs use those five tokens. For gpt-5.5
+      # (none/extra-high, no xhigh/max), gemini, grok, and composer, bake the
+      # desired variant into --model and leave effort default (see the
+      # harness-adapters skill).
+      local slug=$model
+      case "$model" in
+        claude-opus-4-8|claude-sonnet-5|claude-fable-5|claude-opus-4-7)
+          case "$effort" in
+            low|medium|high|xhigh|max) slug="${model}-${effort}" ;;
+          esac
+          ;;
+      esac
+      printf -- '--model %s ' "$(shell_quote "$slug")"
       ;;
   esac
 }
@@ -456,6 +499,11 @@ effort_flag_for_harness() {
     # opencode's interactive `opencode --prompt` launch has a verified --model
     # flag but no verified effort flag. Its `opencode run --variant` flag belongs
     # to a different, non-interactive launch mode, so fm-spawn does not pass it.
+    cursor)
+      # cursor-agent has no standalone effort flag; reasoning effort is folded into
+      # the --model slug by model_flag_for_harness. Emit nothing so __EFFORTFLAG__
+      # stays empty.
+      : ;;
   esac
 }
 
@@ -819,12 +867,54 @@ mkdir -p "$TASK_TMP/gotmp"
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
 TURNEND="$STATE_REAL/$ID.turn-ended"
+CURSOR_HOOK_CREATED=0
 exclude_path() {
   local rel=$1 EXCL
   EXCL=$(git -C "$WT" rev-parse --git-path info/exclude 2>/dev/null || true)
   [ -n "$EXCL" ] || return 0
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
+}
+cursor_hooks_path() {
+  local wt=$1 dir hooks wt_real dir_real hook_real
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  dir="$wt/.cursor"
+  if [ -L "$dir" ]; then
+    echo "warning: cursor stop hook not installed: .cursor is a symlink; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+    echo "warning: cursor stop hook not installed: .cursor is not a directory; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  mkdir -p "$dir" || {
+    echo "warning: cursor stop hook not installed: could not create .cursor directory" >&2
+    return 1
+  }
+  dir_real=$(cd "$dir" 2>/dev/null && pwd -P) || {
+    echo "warning: cursor stop hook not installed: could not canonicalize .cursor directory" >&2
+    return 1
+  }
+  case "$dir_real" in
+    "$wt_real"/*) ;;
+    *)
+      echo "warning: cursor stop hook not installed: .cursor resolves outside the worktree; turn-end will rely on stale-pane detection" >&2
+      return 1
+      ;;
+  esac
+  hooks="$dir/hooks.json"
+  if [ -L "$hooks" ]; then
+    echo "warning: cursor stop hook not installed: .cursor/hooks.json is a symlink; turn-end will rely on stale-pane detection" >&2
+    return 1
+  fi
+  hook_real="$dir_real/hooks.json"
+  case "$hook_real" in
+    "$wt_real"/*) printf '%s\n' "$hooks" ;;
+    *)
+      echo "warning: cursor stop hook not installed: .cursor/hooks.json resolves outside the worktree; turn-end will rely on stale-pane detection" >&2
+      return 1
+      ;;
+  esac
 }
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
@@ -913,6 +1003,56 @@ EOF
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
       ;;
+    cursor*)
+      # cursor-agent fires a project-level "stop" hook when the agent loop ends -
+      # once per turn, the clean equivalent of claude's Stop hook (verified,
+      # cursor-agent 2026.07.01). cursor LAYERS project hooks on top of the
+      # user-level ~/.cursor/hooks.json (Cursor docs: "project layered with user"),
+      # so this per-worktree .cursor/hooks.json adds firstmate's turn-end signal
+      # WITHOUT displacing any global integration hook (e.g. herdr's sessionStart
+      # agent-session reporting, which powers herdr's native busy-state for cursor).
+      # The stop command touches the turn-end file and prints nothing, so cursor's
+      # optional stop-hook followup (triggered only by a {"followup_message":...}
+      # on stdout) never fires. Kept out of git via info/exclude like the other
+      # worktree hooks. If the worktree already ships its own .cursor/hooks.json,
+      # merge firstmate's stop command into it (jq) instead of clobbering the
+      # project's hooks when the file is untracked and parseable.
+      cursor_hooks=$(cursor_hooks_path "$WT" || true)
+      cursor_cmd="touch $(shell_quote "$TURNEND")"
+      cursor_wrote=0
+      if [ -z "$cursor_hooks" ]; then
+        :
+      elif git -C "$WT" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1; then
+        echo "warning: cursor stop hook not installed: .cursor/hooks.json is tracked by the project" >&2
+      elif [ -f "$cursor_hooks" ]; then
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "warning: cursor stop hook not installed: existing .cursor/hooks.json requires jq to merge safely" >&2
+        elif ! jq -e . "$cursor_hooks" >/dev/null 2>&1; then
+          echo "warning: cursor stop hook not installed: existing .cursor/hooks.json is not valid JSON" >&2
+        else
+          cursor_tmp=$(mktemp "$WT/.cursor/hooks.json.XXXXXX")
+          if jq --arg cmd "$cursor_cmd" \
+               '.version = (.version // 1)
+                | .hooks = (if (.hooks | type) == "object" then .hooks else {} end)
+                | .hooks.stop = (((.hooks.stop // []) | if type == "array" then . else [] end)
+                    | map(select(((.command? // "") | test("\\.turn-ended")) | not))
+                    + [{"command": $cmd}])' \
+               "$cursor_hooks" > "$cursor_tmp" 2>/dev/null; then
+            mv "$cursor_tmp" "$cursor_hooks"
+            cursor_wrote=1
+          else
+            rm -f "$cursor_tmp"
+            echo "warning: cursor stop hook not installed: could not merge existing .cursor/hooks.json" >&2
+          fi
+        fi
+      else
+        printf '{"version":1,"hooks":{"stop":[{"command":"%s"}]}}\n' \
+          "$(json_escape "$cursor_cmd")" > "$cursor_hooks"
+        cursor_wrote=1
+        CURSOR_HOOK_CREATED=1
+      fi
+      [ "$cursor_wrote" -eq 0 ] || exclude_path '.cursor/hooks.json'
+      ;;
   esac
 fi
 
@@ -949,6 +1089,7 @@ META_WINDOW=$T
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
   [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+  [ "$CURSOR_HOOK_CREATED" = 1 ] && echo "cursor_hook_created=1"
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
@@ -978,7 +1119,7 @@ META_WINDOW=$T
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
-MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
+MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL" "$EFFORT")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}

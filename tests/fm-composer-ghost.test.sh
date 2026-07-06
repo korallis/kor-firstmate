@@ -152,6 +152,32 @@ test_normal_text_still_pending() {
   pass "fm_pane_input_pending: normal-intensity typed text is still pending"
 }
 
+test_optional_idle_regex_marks_placeholder_empty() {
+  local dir fb capture
+  dir="$TMP_ROOT/cursor-idle"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  printf '\xe2\x86\x92 Add a follow-up\n' > "$capture"
+  if PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+     FM_COMPOSER_IDLE_RE='^(→ )?Add a follow-up$' \
+     fm_pane_input_pending "fakepane"; then
+    fail "explicit idle placeholder regex did not mark the composer empty"
+  fi
+  pass "fm_pane_input_pending: explicit FM_COMPOSER_IDLE_RE marks a placeholder empty"
+}
+
+test_cursor_followup_phrase_inside_real_text_is_pending() {
+  local dir fb capture
+  dir="$TMP_ROOT/cursor-followup-real"; mkdir -p "$dir"
+  fb=$(make_fake_tmux "$dir")
+  capture="$dir/styled.txt"
+  printf 'Add a follow-up to the issue\n' > "$capture"
+  PATH="$fb:$PATH" FM_FAKE_STYLED="$capture" FM_FAKE_CY=0 \
+    fm_pane_input_pending "fakepane" \
+    || fail "real text containing cursor placeholder phrase was not detected as pending"
+  pass "fm_pane_input_pending: real follow-up text is still pending"
+}
+
 test_colored_text_with_2_payload_still_pending() {
   local dir fb capture
   dir="$TMP_ROOT/colored-text"; mkdir -p "$dir"
@@ -222,6 +248,8 @@ test_strip_ghost_keeps_colored_text_with_2_payloads
 test_dim_ghost_only_composer_is_not_pending
 test_dim_ghost_inside_bordered_composer_is_not_pending
 test_normal_text_still_pending
+test_optional_idle_regex_marks_placeholder_empty
+test_cursor_followup_phrase_inside_real_text_is_pending
 test_colored_text_with_2_payload_still_pending
 test_real_text_with_trailing_ghost_is_pending
 test_peek_output_is_escape_free

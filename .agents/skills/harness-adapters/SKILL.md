@@ -1,6 +1,6 @@
 ---
 name: harness-adapters
-description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, and grok.
+description: Agent-only reference for firstmate harness operations. Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter. Contains verified facts for claude, codex, opencode, pi, grok, and cursor.
 user-invocable: false
 metadata:
   internal: true
@@ -30,7 +30,7 @@ The supervision knowledge lives here: busy signature, exit command, interrupt, d
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain and fall back to firstmate's own harness until that adapter is verified.
-If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record the mechanics in `fm-spawn`, the busy signature in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed `FM_COMPOSER_IDLE_RE` empty-composer override, and the verified knowledge here.
+If the captain asks for a new harness, propose verifying it first: spawn a trivial supervised task using `fm-spawn`'s raw-launch-command escape hatch, confirm every fact empirically, then record detection in `fm-harness.sh`, any primary-session recognition in `fm-lock.sh`, dispatch validation in `fm-bootstrap.sh`, launch and hook mechanics in `fm-spawn.sh`, the busy signature and composer behavior in `fm-watch.sh` and `fm-tmux-lib.sh` defaults, any needed away-mode supervisor handling in `fm-supervise-daemon.sh`, cleanup in `fm-teardown.sh`, and the verified knowledge here.
 
 ## Detection
 
@@ -58,6 +58,7 @@ The supported launch-profile flags below were verified locally on 2026-06-30 wit
 | grok | `--model <model>` | `--reasoning-effort <low\|medium\|high\|xhigh>` | Verified on grok 0.2.73. `--effort` parses too, but firstmate's profile axis is reasoning effort. `--reasoning-effort max` is rejected, so `max` is omitted. |
 | pi | `--model <model>` | `--thinking <low\|medium\|high\|xhigh>` | Verified on pi 0.80.2. `max` prints an invalid-thinking warning, so firstmate omits Pi effort when the requested effort is `max`. |
 | opencode | `--model <provider/model>` | none for firstmate's interactive launch | Verified on opencode 1.17.6. `opencode run` has `--variant`, but firstmate launches the interactive `opencode --prompt` path, which has no verified effort flag. |
+| cursor | `--model <slug>` | folded into the `--model` slug as a `-<effort>` suffix only for compatible Claude 1M base slugs | Verified on cursor-agent 2026.07.01. cursor has ONE `--model` flag and no standalone effort flag; effort is a slug suffix (`claude-opus-4-8-high`). The bracket form `slug[effort=high]` is REJECTED - only exact slugs from `cursor-agent models` are accepted. `fm-spawn` appends `-<effort>` only for the Claude 1M base slugs whose exact variants use `low\|medium\|high\|xhigh\|max`; for other slugs, it records `effort=` in meta and launches the bare `--model` slug. |
 
 When a requested effort value is outside the harness-specific accepted set, `fm-spawn` records the requested `effort=` in meta but emits no effort flag for that harness.
 This preserves launch success instead of passing a known-bad value.
@@ -71,6 +72,7 @@ Natural language is acceptable if uncertain.
 - codex: `$<skill>`, for example `$no-mistakes`; `/<skill>` is claude-only and codex rejects it as "Unrecognized command".
 - opencode: no separate verified skill invocation beyond normal slash-command behavior; use natural language if the exact skill command is uncertain.
 - pi: no separate verified skill invocation beyond normal command behavior; use natural language if the exact skill command is uncertain.
+- cursor: `/<skill>`, for example `/no-mistakes` (same form as claude). Skills surface as TUI slash commands; `/no-mistakes` is present and selectable (verified). Like codex/grok, `/` opens a slash-autocomplete popup, so `fm-send`'s retried Enter is what lands the invocation.
 - grok: `/<skill>`, for example `/no-mistakes` (same form as claude). Verified end to end: grok discovers the user-level `no-mistakes` skill, `/no-mistakes` invokes it, and grok drives a real `no-mistakes axi run`. Like codex's `$`/`/` popups, typing `/<skill>` opens grok's slash-autocomplete, so a too-fast Enter selects the popup entry instead of sending, and for an argument-taking command (like `/no-mistakes`'s optional task-first argument) that first Enter only expands the popup selection into an argument-hint placeholder rather than submitting - a genuine second Enter is required (see the grok section below for the 2026-07-03 incident and fix). `fm_tmux_submit_core`'s retried Enter (used by `fm-send` on the tmux backend) already handles this correctly by reading the cursor row; the herdr backend needed a dedicated fix (`fm_backend_herdr_composer_state`, docs/herdr-backend.md) because its prior delta-based verification false-positived on that same popup-close content change.
 
 ## claude (VERIFIED)
@@ -192,3 +194,57 @@ The hook reads `$GROK_WORKSPACE_ROOT`, which is always set for hooks and equals 
 This keeps the hook outside the worktree, needs no trust grant, and writes only firstmate-owned files.
 `fm-teardown` removes the worktree pointer before returning a pooled worktree.
 Secondmate spawns skip the pointer (idle panes are healthy, no stale-pane detection for them).
+
+## cursor (VERIFIED 2026-07-06, cursor-agent 2026.07.01-41b2de7)
+
+Cursor CLI (`cursor-agent`, alias `agent`), the single-gateway execution harness: one adapter reaches Composer 2.5 plus frontier models (Opus 4.8, Sonnet 5, GPT-5.5, Gemini 3, Grok 4.3) by swapping the `--model` slug.
+Auth is the stored `~/.cursor` session (Ultra tier), so no `CURSOR_API_KEY` is passed; spawned crewmates inherit that session.
+Launch with a positional prompt: `cursor-agent --force "$(cat <brief>)"`.
+firstmate uses the DEFAULT interactive TUI, not `-p/--print` (crewmates are persistent: steered mid-task, they run `/no-mistakes`, they append status).
+
+| Fact | Value |
+|---|---|
+| Busy-pane signature | `Add a follow-up.*ctrl\+c to stop` (the mid-turn footer contains both the idle placeholder and interrupt hint, shown iff a turn is running; the spinner line is a braille glyph + `Composing`, e.g. `⠸ Composing`). Idle footer shows only `→ Add a follow-up` with no `ctrl+c to stop`. Requiring the placeholder and interrupt hint on the same line prevents generic output like `Press Ctrl+C to stop` from reading as an agent busy footer. |
+| Exit command | double `Ctrl+C` when idle (single press when idle is a no-op; the app survives). Prints `To resume this session: agent --resume=<chatId>`. NOT `/exit`, NOT `/quit`. |
+| Interrupt | single `Ctrl+C` mid-turn cancels the current turn and returns to idle without killing the app (the footer shows `ctrl+c to stop` mid-turn). |
+| Skill invocation | `/<skill>` (e.g. `/no-mistakes`), same form as claude; skills surface as TUI slash commands. Opens a slash-autocomplete popup, so `fm-send`'s retried Enter lands it. |
+| Autonomy | `--force` (alias `--yolo`, footer shows `Run Everything`); auto-approves every tool execution, verified to run file edits and shell fully unattended. It is the targeted equivalent of claude's `--dangerously-skip-permissions`. `--trust` is print/headless-only and does NOT apply to the interactive TUI. |
+| Env marker | `CURSOR_AGENT=1`, set for child/tool processes in both `-p` and interactive modes. cursor ALSO sets `AI_AGENT=claude-code_..._agent` for protocol compatibility, so `fm-harness.sh` matches only the unambiguous `CURSOR_AGENT` marker, never `AI_AGENT`. |
+| Resume | `cursor-agent --resume=<chatId>` (id printed on exit), or `--resume` (session picker), `--continue` (most recent), `cursor-agent resume` / `ls`. |
+
+First-run trust dialog per not-yet-trusted workspace: "Workspace Trust Required / Do you trust the contents of this directory? `[a] Trust this workspace` / `[q] Quit`".
+Accept with `bin/fm-send.sh <window> --key a` (or Enter on the highlighted option) and verify the brief started processing.
+`--trust` only clears this in print/headless mode, not the interactive TUI, so the dialog must be answered with a keystroke after launch.
+
+**Model and effort slugs.**
+`--model` accepts only EXACT slugs from `cursor-agent models`; the parameterized bracket form `'claude-opus-4-8[effort=high]'` is REJECTED in both `-p` and interactive modes (verified: it errors "Cannot use this model" and lists the valid slugs).
+So `fm-spawn` folds firstmate's effort axis into the slug as a `-<effort>` suffix only for compatible Claude 1M base slugs (`model_flag_for_harness`, `bin/fm-spawn.sh`); `effort_flag_for_harness` emits nothing for cursor.
+firstmate's effort vocab `low|medium|high|xhigh|max` maps 1:1 onto the Claude 1M families - `claude-opus-4-8`, `claude-sonnet-5`, `claude-fable-5`, `claude-opus-4-7` - whose exact slugs use those five tokens, and the bare base slug is also valid (model default).
+For `gpt-5.5` the effort vocab is `none|low|medium|high|extra-high` (NO `xhigh`, NO `max` - `gpt-5.5-xhigh` is rejected), and `gemini-3.1-pro`, `grok-4.3`, and `composer-2.5` have no effort variants; for those, bake the desired variant into `--model` and leave `--effort` default, or let `fm-spawn` omit the unsupported suffix while preserving `effort=` in meta.
+Verified base slugs (all accept a bare launch): `composer-2.5`, `claude-opus-4-8`, `claude-sonnet-5`, `gpt-5.5`, `gemini-3.1-pro`, `grok-4.3`.
+
+Turn-end hook: cursor fires a project-level `stop` hook when the agent loop ends, giving firstmate a precise per-turn wake instead of only stale-pane detection (verified: fired at each turn's completion and again after a mid-task steer).
+cursor LAYERS project hooks on top of the user-level `~/.cursor/hooks.json` (Cursor docs: "project layered with user"), so `fm-spawn` writes a per-worktree `<worktree>/.cursor/hooks.json` whose `stop` command touches this task's `state/<id>.turn-ended`, WITHOUT displacing any global integration hook (e.g. herdr's `sessionStart` agent-session reporting, or Orca's hooks).
+The stop command prints nothing, so cursor's optional stop-hook followup (triggered only by a `{"followup_message":...}` on stdout) never fires.
+The file is kept out of git via `info/exclude` like the other harnesses' worktree hooks.
+If `.cursor` is a symlink or non-directory, or `.cursor/hooks.json` would resolve outside the worktree, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
+If `.cursor/hooks.json` is already tracked by the project, `fm-spawn` leaves it untouched and warns that the Cursor stop hook was not installed.
+If an existing untracked `.cursor/hooks.json` is valid JSON and `jq` is available, `fm-spawn` merges its current stop command while replacing any prior firstmate stop command that touched a `*.turn-ended` path.
+If an existing file is unparseable or `jq` is missing, `fm-spawn` leaves it untouched and warns instead of overwriting it.
+When firstmate created `.cursor/hooks.json` fresh during spawn, `fm-teardown` removes the file directly without requiring `jq`.
+When firstmate merged into a pre-existing local hook file, `fm-teardown` uses `jq` to remove only the stop command for that task's `*.turn-ended` file and preserves the rest of the file.
+Teardown applies the same in-worktree containment check before removing or editing `.cursor/hooks.json`, so a project-controlled symlink cannot make it delete an external hook file.
+Secondmate spawns skip the hook (idle panes are healthy, no stale-pane detection for them).
+
+**Composer-cursor quirk (verified).** When idle, cursor parks the terminal cursor OFF the composer row: the composer text sits on the `→ ...` row while `#{cursor_y}` points at the footer/path row below it.
+So `fm_tmux_composer_state` resolves the target's recorded harness from `state/<id>.meta` for `fm-<id>` windows and, for cursor panes only, scans a bounded plain pane tail for the last stripped line beginning with the literal `→ ` prompt.
+Supervisor-primary panes do not have task meta, so the away-mode daemon resolves `FM_SUPERVISOR_HARNESS` first, falls back to `bin/fm-harness.sh`, and passes that override into the same tmux classifier.
+When that override is `cursor`, both the pending-input guard and submit confirmation use Cursor's arrow-row classifier.
+It returns `empty` when that row is blank after the prompt, exactly `Add a follow-up`, or the Cursor busy footer `Add a follow-up ... ctrl+c to stop`; it returns `pending` when any other text remains there, and `unknown` if no cursor composer row is visible.
+That restores Enter retry for slash autocomplete while avoiding false positives from non-cursor arrow-prefixed output and avoiding the off-row `#{cursor_y}` footer.
+There is no cursor placeholder default in `FM_COMPOSER_IDLE_RE`; the override is optional and empty by default.
+
+**Backend note.** Verified on the tmux reference backend.
+`fm-spawn` refuses cursor on non-tmux backends because cursor submit verification is only implemented for tmux's harness-scoped `→ ` row detector.
+The away-mode supervisor path applies the same gate: a cursor primary is only verified when `FM_SUPERVISOR_BACKEND` resolves to tmux.
+herdr, zellij, Orca, and cmux cursor support are unverified follow-ups.

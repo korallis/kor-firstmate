@@ -103,6 +103,87 @@ meta_value() {
   fm_meta_get "$meta" "$key"
 }
 
+remove_cursor_hook() {
+  local wt=$1 id=$2 meta=${3:-} hooks created tmp needle
+  hooks=$(cursor_hooks_path_for_cleanup "$wt" || true)
+  [ -n "$hooks" ] || return 0
+  git -C "$wt" ls-files --error-unmatch -- .cursor/hooks.json >/dev/null 2>&1 && return 0
+  created=
+  if [ -n "$meta" ] && [ -f "$meta" ]; then
+    created=$(meta_value "$meta" cursor_hook_created || true)
+  fi
+  if [ "$created" = 1 ]; then
+    rm -f "$hooks"
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "warning: cursor hook cleanup skipped for $wt: jq is required to preserve local hooks" >&2
+    return 0
+  fi
+  if ! jq -e . "$hooks" >/dev/null 2>&1; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor/hooks.json is not valid JSON" >&2
+    return 0
+  fi
+  tmp=$(mktemp "$wt/.cursor/hooks.json.XXXXXX")
+  needle="$id.turn-ended"
+  if jq --arg needle "$needle" \
+       'if ((.hooks? | type) == "object" and (.hooks.stop? | type) == "array") then
+          .hooks.stop |= map(select(((.command? // "") | contains($needle)) | not))
+          | if (.hooks.stop | length) == 0 then del(.hooks.stop) else . end
+        else . end' \
+       "$hooks" > "$tmp" 2>/dev/null; then
+    if [ "$created" = 1 ] && jq -e '((.hooks? // {}) | type == "object" and length == 0)' "$tmp" >/dev/null 2>&1; then
+      rm -f "$hooks" "$tmp"
+    else
+      mv "$tmp" "$hooks"
+    fi
+  else
+    rm -f "$tmp"
+    echo "warning: cursor hook cleanup skipped for $wt: could not update .cursor/hooks.json" >&2
+  fi
+}
+
+cursor_hooks_path_for_cleanup() {
+  local wt=$1 dir hooks wt_real dir_real hook_real
+  [ -n "$wt" ] || return 1
+  dir="$wt/.cursor"
+  [ -e "$dir" ] || return 1
+  if [ -L "$dir" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor is a symlink" >&2
+    return 1
+  fi
+  if [ ! -d "$dir" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor is not a directory" >&2
+    return 1
+  fi
+  wt_real=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  dir_real=$(cd "$dir" 2>/dev/null && pwd -P) || {
+    echo "warning: cursor hook cleanup skipped for $wt: could not canonicalize .cursor directory" >&2
+    return 1
+  }
+  case "$dir_real" in
+    "$wt_real"/*) ;;
+    *)
+      echo "warning: cursor hook cleanup skipped for $wt: .cursor resolves outside the worktree" >&2
+      return 1
+      ;;
+  esac
+  hooks="$dir/hooks.json"
+  [ -e "$hooks" ] || return 1
+  if [ -L "$hooks" ]; then
+    echo "warning: cursor hook cleanup skipped for $wt: .cursor/hooks.json is a symlink" >&2
+    return 1
+  fi
+  hook_real="$dir_real/hooks.json"
+  case "$hook_real" in
+    "$wt_real"/*) printf '%s\n' "$hooks" ;;
+    *)
+      echo "warning: cursor hook cleanup skipped for $wt: .cursor/hooks.json resolves outside the worktree" >&2
+      return 1
+      ;;
+  esac
+}
+
 require_orca_worktree_id() {
   local meta=$1 id
   id=$(meta_value "$meta" orca_worktree_id)
@@ -642,11 +723,13 @@ cleanup_firstmate_home_children() {
       if [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
         rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend"
+        remove_cursor_hook "$child_wt" "$child_id" "$child_meta"
       fi
       fm_backend_remove_worktree "$child_backend" "$child_orca_worktree_id" || return 1
     elif [ -n "$child_wt" ] && [ -d "$child_wt" ]; then
       validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       rm -f "$child_wt/.claude/settings.local.json" "$child_wt/.opencode/plugins/fm-turn-end.js" "$child_wt/.fm-grok-turnend"
+      remove_cursor_hook "$child_wt" "$child_id" "$child_meta"
       if [ -n "$child_proj" ] && [ -d "$child_proj" ] && command -v treehouse >/dev/null 2>&1; then
         ( cd "$child_proj" && treehouse return --force "$child_wt" ) || safe_rm_rf_child_worktree "$child_wt" "$child_proj"
       else
@@ -779,6 +862,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
       fi
     fi
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
+    remove_cursor_hook "$WT" "$ID" "$META"
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
@@ -791,6 +875,7 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   fi
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
+  remove_cursor_hook "$WT" "$ID" "$META"
   # Kills remaining processes in the worktree (including the agent), resets, returns
   # to pool. treehouse resolves the pool from the working directory, so run it from
   # the project.

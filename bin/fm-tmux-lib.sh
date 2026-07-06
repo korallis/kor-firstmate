@@ -27,17 +27,19 @@
 # single composer row is captured, so no escape-laden pane bulk is produced. This
 # is harness-generic: any harness that dims placeholder/ghost text benefits.
 #
-# Per-harness override: FM_COMPOSER_IDLE_RE matches an empty composer after
-# dim-ghost and structural border stripping. FM_BUSY_REGEX overrides the busy
-# footer set (mirrors fm-watch.sh / the daemon).
+# Per-harness override: FM_COMPOSER_IDLE_RE optionally matches an empty composer
+# after dim-ghost and structural border stripping. FM_BUSY_REGEX overrides the
+# busy footer set (mirrors fm-watch.sh / the daemon).
 #
 # All functions are `set -u` and `set -e` safe (guarded tmux calls, explicit
 # returns) so they can be sourced into either context.
 
 # Busy footers per harness (mirror fm-watch.sh). claude/codex: "esc to
 # interrupt"; opencode: "esc interrupt"; pi: "Working..."; grok: "Ctrl+c:cancel"
-# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73).
-FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel'
+# (grok's mid-turn cancel hint, shown iff a turn is running - verified grok 0.2.73);
+# cursor: the mid-turn footer includes both the idle placeholder and interrupt hint,
+# e.g. "Add a follow-up ... ctrl+c to stop" (verified cursor-agent 2026.07.01).
+FM_TMUX_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working\.\.\.|Ctrl\+c:cancel|Add a follow-up.*ctrl\+c to stop'
 
 # fm_tmux_strip_ghost: remove dim/faint (ANSI SGR 2) styled runs from one captured
 # composer line, then drop any remaining escape sequences, leaving only the plain,
@@ -103,6 +105,63 @@ fm_tmux_strip_ghost() {
   '
 }
 
+fm_tmux_strip_composer_borders() {
+  local line=$1 stripped
+  stripped=${line//│/}
+  stripped=${stripped//┃/}
+  stripped=${stripped//|/}
+  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
+  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  printf '%s' "$stripped"
+}
+
+fm_tmux_target_harness() {
+  local target=$1 win id state_dir meta harness
+  win=$(tmux display-message -p -t "$target" '#{window_name}' 2>/dev/null) || return 1
+  case "$win" in
+    fm-*) id=${win#fm-} ;;
+    *) return 1 ;;
+  esac
+  case "$id" in ''|*/*|*'..'*) return 1 ;; esac
+  if [ -n "${FM_STATE_OVERRIDE:-}" ]; then
+    state_dir=$FM_STATE_OVERRIDE
+  elif [ -n "${FM_HOME:-}" ]; then
+    state_dir=$FM_HOME/state
+  else
+    return 1
+  fi
+  meta="$state_dir/$id.meta"
+  [ -f "$meta" ] || return 1
+  harness=$(grep '^harness=' "$meta" 2>/dev/null | tail -1 | cut -d= -f2- || true)
+  [ -n "$harness" ] || return 1
+  printf '%s' "$harness"
+}
+
+fm_tmux_cursor_composer_state() {
+  local target=$1 tail line stripped composer content
+  tail=$(tmux capture-pane -p -t "$target" -S -12 2>/dev/null) || { printf 'unknown'; return 0; }
+  composer=
+  while IFS= read -r line || [ -n "$line" ]; do
+    stripped=$(fm_tmux_strip_composer_borders "$line")
+    case "$stripped" in
+      '→ '*) composer=$stripped ;;
+    esac
+  done <<EOF
+$tail
+EOF
+  [ -n "$composer" ] || { printf 'unknown'; return 0; }
+  content=${composer#'→ '}
+  content="${content#"${content%%[![:space:]]*}"}"
+  content="${content%"${content##*[![:space:]]}"}"
+  case "$content" in
+    ''|'Add a follow-up') printf 'empty'; return 0 ;;
+  esac
+  if printf '%s' "$content" | grep -qiE '^Add a follow-up[[:space:]]+ctrl\+c to stop$'; then
+    printf 'empty'; return 0
+  fi
+  printf 'pending'; return 0
+}
+
 # fm_tmux_composer_state: classify the cursor/composer line of <target> as
 #   empty   - no pending input (blank, a bare prompt, a busy footer, or only dim
 #             ghost/placeholder text). Safe to inject; also the positive
@@ -118,23 +177,25 @@ fm_tmux_strip_ghost() {
 # borders ("│ … │", heavy "┃", or a plain ASCII "|") using literal-string
 # substitution (bash 3.2 safe, locale-independent — no \u escapes, no multibyte
 # character classes), and asks whether anything real is left.
-fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
-  local target=$1 cy raw line stripped
+fm_tmux_composer_state() {  # <target> [harness-override] -> empty|pending|unknown
+  local target=$1 harness_override=${2:-} cy raw line stripped target_harness
+  if [ -n "$harness_override" ]; then
+    target_harness=$harness_override
+  else
+    target_harness=$(fm_tmux_target_harness "$target" || true)
+  fi
+  [ "$target_harness" = cursor ] && { fm_tmux_cursor_composer_state "$target"; return 0; }
   cy=$(tmux display-message -p -t "$target" '#{cursor_y}' 2>/dev/null) || { printf 'unknown'; return 0; }
   case "$cy" in ''|*[!0-9]*) printf 'unknown'; return 0 ;; esac
   raw=$(tmux capture-pane -e -p -t "$target" -S "$cy" -E "$cy" 2>/dev/null) || { printf 'unknown'; return 0; }
   line=$(printf '%s\n' "$raw" | fm_tmux_strip_ghost)
   # Strip the composer box borders (literal glyphs — no character classes).
-  stripped=${line//│/}      # U+2502 light vertical (claude)
-  stripped=${stripped//┃/}  # U+2503 heavy vertical
-  stripped=${stripped//|/}  # ASCII pipe
-  # Trim surrounding whitespace.
-  stripped="${stripped#"${stripped%%[![:space:]]*}"}"
-  stripped="${stripped%"${stripped##*[![:space:]]}"}"
+  stripped=$(fm_tmux_strip_composer_borders "$line")
   # Nothing left inside the box = empty composer.
-  [ -n "$stripped" ] || { printf 'empty'; return 0; }
-  if [ -n "${FM_COMPOSER_IDLE_RE:-}" ] \
-     && printf '%s' "$stripped" | grep -qiE "$FM_COMPOSER_IDLE_RE"; then
+  if [ -z "$stripped" ]; then
+    printf 'empty'; return 0
+  fi
+  if [ -n "${FM_COMPOSER_IDLE_RE:-}" ] && printf '%s' "$stripped" | grep -qiE "$FM_COMPOSER_IDLE_RE"; then
     printf 'empty'; return 0
   fi
   # Just a bare prompt glyph = empty composer (idle).
@@ -151,8 +212,12 @@ fm_tmux_composer_state() {  # <target> -> empty|pending|unknown
 # fm_pane_input_pending: 0 (pending) if the cursor line holds real unsubmitted
 # text, 1 otherwise. An unreadable pane is treated as NOT pending (fail-safe:
 # the same bias the old daemon used — an unknown pane defers nothing here).
-fm_pane_input_pending() {  # <target>
-  [ "$(fm_tmux_composer_state "$1")" = pending ]
+fm_pane_input_pending() {  # <target> [harness-override]
+  if [ -n "${2:-}" ]; then
+    [ "$(fm_tmux_composer_state "$1" "$2")" = pending ]
+  else
+    [ "$(fm_tmux_composer_state "$1")" = pending ]
+  fi
 }
 
 # fm_pane_is_busy: 0 if the pane's last few non-blank lines show a busy footer
@@ -173,21 +238,29 @@ fm_pane_is_busy() {  # <target>
 #     not be mistaken for a delivered escalation).
 #   - fm-send fails only on "pending" (lenient: a positively-confirmed swallow),
 #     so an unreadable pane never turns a normal steer into a false error.
-fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep>
-  local target=$1 retries=$2 sleep_s=$3 i=0 state
+fm_tmux_submit_enter_core() {  # <target> <retries> <enter-sleep> [harness-override]
+  local target=$1 retries=$2 sleep_s=$3 harness_override=${4:-} i=0 state
   while :; do
     tmux send-keys -t "$target" Enter 2>/dev/null || true
     sleep "$sleep_s"
-    state=$(fm_tmux_composer_state "$target")
+    if [ -n "$harness_override" ]; then
+      state=$(fm_tmux_composer_state "$target" "$harness_override")
+    else
+      state=$(fm_tmux_composer_state "$target")
+    fi
     [ "$state" = pending ] || { printf '%s' "$state"; return 0; }
     i=$((i + 1))
     [ "$i" -lt "$retries" ] || { printf 'pending'; return 0; }
   done
 }
 
-fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle>
-  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5
+fm_tmux_submit_core() {  # <target> <text> <retries> <enter-sleep> <settle> [harness-override]
+  local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 harness_override=${6:-}
   tmux send-keys -t "$target" -l "$text" 2>/dev/null || { printf 'send-failed'; return 0; }
   sleep "$settle"
-  fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+  if [ -n "$harness_override" ]; then
+    fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s" "$harness_override"
+  else
+    fm_tmux_submit_enter_core "$target" "$retries" "$sleep_s"
+  fi
 }
